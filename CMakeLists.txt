@@ -44,10 +44,12 @@ add_library(alignsim_core STATIC
     src/sim/AlignScene.h           src/sim/AlignScene.cpp
     src/sim/PickScene.h            src/sim/PickScene.cpp
     src/sim/CalibRecorder.h        src/sim/CalibRecorder.cpp
+    src/sim/CalibBoard.h           src/sim/CalibBoard.cpp
     src/core/AppConfig.h           src/core/AppConfig.cpp
 )
 target_include_directories(alignsim_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(alignsim_core PUBLIC Qt6::Core Qt6::Network)
+# 20261103 ZJH 标定板生成用到 QImage/QPainter/QPdfWriter, 需要 Qt6::Gui
+target_link_libraries(alignsim_core PUBLIC Qt6::Core Qt6::Gui Qt6::Network)
 
 # 20261024 ZJH 脚本库: Lua 引擎与函数绑定
 add_library(alignsim_script STATIC
@@ -66,6 +68,7 @@ add_executable(AlignSim WIN32
     src/gui/PickView.h            src/gui/PickView.cpp
     src/gui/PickPage.h            src/gui/PickPage.cpp
     src/gui/ScriptPage.h          src/gui/ScriptPage.cpp
+    src/gui/CalibBoardPage.h      src/gui/CalibBoardPage.cpp
 )
 target_link_libraries(AlignSim PRIVATE alignsim_script Qt6::Widgets)
 
@@ -78,7 +81,7 @@ add_custom_command(TARGET AlignSim POST_BUILD
 
 # 20261024 ZJH 单元测试 (Qt Test, 正式回归套件)
 enable_testing()
-foreach(testName test_protocols test_kinematics test_stage test_scenes test_lua)
+foreach(testName test_protocols test_kinematics test_stage test_scenes test_lua test_board)
     add_executable(${testName} tests/${testName}.cpp)
     target_link_libraries(${testName} PRIVATE alignsim_script Qt6::Test)
     add_test(NAME ${testName} COMMAND ${testName})

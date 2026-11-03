@@ -1,5 +1,13 @@
 # 开发记录
 
+## [2026-11-03]
+
+### 17:55 - 相机内参标定板
+- **修改文件**: `src/sim/CalibBoard.h/.cpp`, `src/gui/CalibBoardPage.h/.cpp`, `src/gui/MainWindow.h/.cpp`, `src/core/AppConfig.h/.cpp`, `CMakeLists.txt`, `tests/test_board.cpp`, `联调说明.md`
+- **修改类型**: 新增
+- **修改内容**: 棋盘格/对称圆点/非对称圆点/Halcon 风格圆点板生成 (屏幕/PNG/PDF 共用绘制函数, 整数像素格距, 棋盘格无抗锯齿); 「内参标定板」页签: 预览、显示器选择、像素点距 (系统读数可覆盖)、按目标 mm 换算格距、目标屏 1:1 物理像素全屏 (抵消 Windows 缩放)、导出 PNG(含 DPI)/PDF(物理尺寸)/参数 TXT、OpenCV 与 gen_caltab 参数; 配置持久化; alignsim_core 新增 Qt6::Gui 依赖
+- **关联功能**: 相机内参标定 (验证: test_board 9 例; 100%/150% 缩放双屏 1:1 逐像素一致; OpenCV 4.13 四种图案识别偏差 < 0.001px)
+
 ## [2026-10-26]
 
 ### 11:18 - 吉嘉 G+ 真实 UVW 运动学对齐、Modbus TCP 与全项优化

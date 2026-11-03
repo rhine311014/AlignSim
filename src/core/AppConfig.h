@@ -5,6 +5,7 @@
 #include "motion/StageErrorModel.h"
 #include "motion/StageKinematics.h"
 #include "sim/AlignScene.h"
+#include "sim/CalibBoard.h"
 #include "sim/PickScene.h"
 
 #include <QString>
@@ -37,6 +38,10 @@ struct AppSettings {
     PickSceneConfig pickConfig;  // 拾取场景
     AlignDisplay alignDisplay;   // 对位拍屏显示 (固定比例; Y 轴方向以 bViewYDown 为准)
     PickDisplay pickDisplay;     // 拾取拍屏显示与标定 Mark (显示产品/标定Mark 开关属运行态, 不保存)
+
+    CalibBoardSpec calibBoard;          // 20261103 ZJH 内参标定板参数
+    double dBoardPixelPitchMm = 0.0;    // 标定板显示器像素点距 (0 = 使用系统读数)
+    double dBoardPrintPitchMm = 10.0;   // 标定板 PDF 打印格距 (mm)
 
     bool bViewYDown = false;     // 视图 Y 轴朝下 (默认数学坐标 Y 朝上)
     int nRegisterViewStart = 0;  // 寄存器表起始地址

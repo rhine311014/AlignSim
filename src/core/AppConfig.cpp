@@ -233,6 +233,19 @@ bool load(const QString& strPath, AppSettings& s, QString& strErr)
     s.pickDisplay.bSimulateDefect = pickDisp.value("simulateDefect").toBool(s.pickDisplay.bSimulateDefect);
 
     const QJsonObject ui = root.value("ui").toObject();
+    // 20261103 ZJH 内参标定板
+    const QJsonObject board = root.value("calibBoard").toObject();
+    s.calibBoard.eType = static_cast<BoardType>(std::clamp(board.value("type").toInt(static_cast<int>(s.calibBoard.eType)), 0, 3));
+    s.calibBoard.nCols = board.value("cols").toInt(s.calibBoard.nCols);
+    s.calibBoard.nRows = board.value("rows").toInt(s.calibBoard.nRows);
+    s.calibBoard.nPitchPx = board.value("pitchPx").toInt(s.calibBoard.nPitchPx);
+    s.calibBoard.dCircleRatio = board.value("circleRatio").toDouble(s.calibBoard.dCircleRatio);
+    s.calibBoard.nMarginPitch = board.value("margin").toInt(s.calibBoard.nMarginPitch);
+    s.calibBoard.bInvert = board.value("invert").toBool(s.calibBoard.bInvert);
+    s.calibBoard = CalibBoard::normalized(s.calibBoard);
+    s.dBoardPixelPitchMm = std::max(0.0, board.value("pixelPitchMm").toDouble(s.dBoardPixelPitchMm));
+    s.dBoardPrintPitchMm = board.value("printPitchMm").toDouble(s.dBoardPrintPitchMm);
+
     s.bViewYDown = ui.value("viewYDown").toBool(s.bViewYDown);
     s.nRegisterViewStart = ui.value("registerStart").toInt(s.nRegisterViewStart);
     return true;  // 返回读取成功
@@ -278,6 +291,11 @@ bool save(const QString& strPath, const AppSettings& s, QString& strErr)
         { "calibOffsetX", s.pickDisplay.dCalibOffsetX }, { "calibOffsetY", s.pickDisplay.dCalibOffsetY },
         { "noiseLevel", s.pickDisplay.nNoiseLevel }, { "blurLevel", s.pickDisplay.nBlurLevel },
         { "simulateDefect", s.pickDisplay.bSimulateDefect } };
+    root["calibBoard"] = QJsonObject{
+        { "type", static_cast<int>(s.calibBoard.eType) }, { "cols", s.calibBoard.nCols }, { "rows", s.calibBoard.nRows },
+        { "pitchPx", s.calibBoard.nPitchPx }, { "circleRatio", s.calibBoard.dCircleRatio },
+        { "margin", s.calibBoard.nMarginPitch }, { "invert", s.calibBoard.bInvert },
+        { "pixelPitchMm", s.dBoardPixelPitchMm }, { "printPitchMm", s.dBoardPrintPitchMm } };
     root["ui"] = QJsonObject{ { "viewYDown", s.bViewYDown }, { "registerStart", s.nRegisterViewStart } };
 
     QDir().mkpath(QFileInfo(strPath).absolutePath());  // 确保目录存在

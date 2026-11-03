@@ -4,6 +4,7 @@
 #include "comm/PlcServer.h"
 #include "core/RegisterBank.h"
 #include "gui/AlignPage.h"
+#include "gui/CalibBoardPage.h"
 #include "gui/AlignView.h"
 #include "gui/PickPage.h"
 #include "gui/PickView.h"
@@ -322,6 +323,9 @@ void MainWindow::collectSettingsFromCore()
     m_settings.pickDisplay = m_pPickScene->display();
     m_settings.bViewYDown = m_pChkYDown->isChecked();
     m_settings.nRegisterViewStart = m_pRegTable->startAddress();
+    m_settings.calibBoard = m_pBoardPage->spec();  // 20261103 ZJH 标定板参数
+    m_settings.dBoardPixelPitchMm = m_pBoardPage->pixelPitchSetting();
+    m_settings.dBoardPrintPitchMm = m_pBoardPage->printPitchMm();
 }
 
 void MainWindow::buildUi()
@@ -419,6 +423,10 @@ void MainWindow::buildUi()
     pStageScroll->setWidgetResizable(true);
     pStageScroll->setWidget(pStagePage);
     pTabs->addTab(pStageScroll, QStringLiteral("运动平台配置"));
+    // 20261103 ZJH 相机内参标定板
+    m_pBoardPage = new CalibBoardPage(pTabs);
+    m_pBoardPage->setSettings(m_settings.calibBoard, m_settings.dBoardPixelPitchMm, m_settings.dBoardPrintPitchMm);
+    pTabs->addTab(m_pBoardPage, QStringLiteral("内参标定板"));
 
     auto* pLogHost = new QFrame(pSplitter);
     pLogHost->setObjectName(QStringLiteral("logCard"));

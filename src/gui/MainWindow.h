@@ -19,6 +19,7 @@ class PlcServer;
 class LuaEngine;
 class AlignPage;
 class PickPage;
+class CalibBoardPage;
 class RegisterTableWidget;
 class StageConfigWidget;
 class QCheckBox;
@@ -92,6 +93,7 @@ private:
     RegisterTableWidget* m_pRegTable = nullptr;
     AlignPage* m_pAlignPage = nullptr;
     PickPage* m_pPickPage = nullptr;
+    CalibBoardPage* m_pBoardPage = nullptr;  // 20261103 ZJH 内参标定板页
     StageConfigWidget* m_pAlignStageWidget = nullptr;
     StageConfigWidget* m_pPickStageWidget = nullptr;
 };
