@@ -76,7 +76,7 @@ private:
     QSpinBox* m_pSpinRows = nullptr;
     QSpinBox* m_pSpinPitchPx = nullptr;
     QDoubleSpinBox* m_pSpinRatio = nullptr;
-    QDoubleSpinBox* m_pSpinCodeRatio = nullptr;  // DM 码边长 / 格距
+    QSpinBox* m_pSpinCodeSpacing = nullptr;      // DM 码间距 (格)
     QSpinBox* m_pSpinMargin = nullptr;
     QCheckBox* m_pChkInvert = nullptr;
     QComboBox* m_pComboScreen = nullptr;

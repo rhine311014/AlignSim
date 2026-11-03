@@ -156,45 +156,51 @@ private slots:
 
     void dmChessboard()
     {
-        // 20261103 ZJH DM 码棋盘格: 尺寸/角点同棋盘格, 码内容补零, 模块整数像素且与编码器逐模块一致
+        // 20261103 ZJH DM 码棋盘格 (康耐视风格): 交错网格放码, 2×2 格黑底白码, 内容 "X,Y V1 P格距 MM"
         CalibBoardSpec spec;
         spec.eType = BoardType::DmChessboard;
-        spec.nPitchPx = 60;
-        QCOMPARE(CalibBoard::boardSizePx(spec), QSize(720, 540));
-        QCOMPARE(CalibBoard::featurePointsInPitch(spec).size(), size_t(54));
-        QCOMPARE(CalibBoard::dmCodeText(spec, 0, 1), QStringLiteral("R00C01"));
-        CalibBoardSpec specWide = spec;
-        specWide.nCols = 120;
-        QCOMPARE(CalibBoard::dmCodeText(specWide, 3, 7), QStringLiteral("R03C007"));
+        spec.nCols = 22;
+        spec.nRows = 12;
+        spec.nPitchPx = 45;
+        spec.dCodePitchMm = 2.0;
+        QCOMPARE(CalibBoard::featurePointsInPitch(spec).size(), size_t(21 * 11));
+        // 20261103 ZJH 内容格式与参考板 (康耐视) 解码结果一致
+        QCOMPARE(CalibBoard::dmCodeText(spec, 80, 90), QStringLiteral("80,90 V1 P2 MM"));
+        // 20261103 ZJH 间距 10: 主网格 (10,10)(20,10), 错排 (5,5)(15,5); 行优先
+        QCOMPARE(CalibBoard::dmCodeCorners(spec),
+                 (std::vector<QPoint>{ QPoint(5, 5), QPoint(15, 5), QPoint(10, 10), QPoint(20, 10) }));
+        CalibBoardSpec specOdd = spec;
+        specOdd.nCodeSpacing = 7;  // 奇数间距取偶数 6
+        QCOMPARE(CalibBoard::normalized(specOdd).nCodeSpacing, 6);
 
-        // 20261103 ZJH 布局: 0.7×60 = 42px / 12 模块 → 3px 模块, 码 36px, 偏移 12px
+        // 20261103 ZJH 布局: 内容 12 码字 → 16×16; 码区 90px / 18 → 5px 模块, 符号 80px, 偏移 5px
         const CalibBoard::DmLayout layout = CalibBoard::dmLayout(spec);
-        QCOMPARE(layout.nSymbolSize, 12);
-        QCOMPARE(layout.dModulePx, 3.0);
-        QCOMPARE(layout.dOffsetPx, 12.0);
+        QCOMPARE(layout.nSymbolSize, 16);
+        QCOMPARE(layout.dModulePx, 5.0);
+        QCOMPARE(layout.dOffsetPx, 5.0);
 
-        // 20261103 ZJH 第 0 行第 1 列白格 (含 1 格留白, 左上角像素 (120, 60)) 的码逐模块比对
+        // 20261103 ZJH 角点 (5,5) 的码区左上角像素 = (1 + 5 − 1) × 45 = 225; 逐模块比对 (深色模块画成白)
         const QImage img = CalibBoard::render(spec);
         DmSymbol sym;
         std::string strErr;
-        QVERIFY(DataMatrix::encode("R00C01", sym, strErr, layout.nSymbolSize));
-        const int nX0 = 120 + 12, nY0 = 60 + 12;  // 码左上角像素
+        QVERIFY(DataMatrix::encode("5,5 V1 P2 MM", sym, strErr, layout.nSymbolSize));
+        const int nX0 = 225 + 5, nY0 = 225 + 5;  // 符号左上角像素
         for (int r = 0; r < sym.nSize; ++r) {
             for (int c = 0; c < sym.nSize; ++c) {
-                const int nGray = qGray(img.pixel(nX0 + c * 3 + 1, nY0 + r * 3 + 1));  // 模块中心像素
-                QCOMPARE(nGray < 128, sym.dark(r, c));
+                const int nGray = qGray(img.pixel(nX0 + c * 5 + 2, nY0 + r * 5 + 2));  // 模块中心像素
+                QCOMPARE(nGray > 128, sym.dark(r, c));
             }
         }
-        // 20261103 ZJH 码四周静区为白, 黑格内无码
-        QCOMPARE(qGray(img.pixel(120 + 5, 60 + 5)), 255);
-        QCOMPARE(qGray(img.pixel(60 + 30, 60 + 30)), 0);
-        // 20261103 ZJH 参数说明含 Halcon 读码与 OpenCV 角点
-        const QString strDesc = CalibBoard::describe(spec, 5.0);
-        QVERIFY(strDesc.contains(QStringLiteral("Data Matrix ECC 200")));
-        QVERIFY(strDesc.contains(QStringLiteral("cv::Size(9, 6)")));
+        // 20261103 ZJH 码区四周黑边; 码区内原本的白格也被涂黑
+        QCOMPARE(qGray(img.pixel(225 + 2, 225 + 2)), 0);
+        QCOMPARE(qGray(img.pixel(225 + 88, 225 + 2)), 0);
+        // 20261103 ZJH 参数说明: 码数量、极性、Halcon 读码
+        const QString strDesc = CalibBoard::describe(spec, 2.0);
+        QVERIFY(strDesc.contains(QStringLiteral("DM 码: 4 个")));
+        QVERIFY(strDesc.contains(QStringLiteral("light_on_dark")));
         QVERIFY(!strDesc.contains(QStringLiteral("警告")));
-        spec.nPitchPx = 40;  // 28px / 12 → 2px 模块, 应警告
-        QVERIFY(CalibBoard::describe(spec, 5.0).contains(QStringLiteral("警告")));
+        spec.nCols = 4;  // 放不下码 → 警告
+        QVERIFY(CalibBoard::describe(spec, 2.0).contains(QStringLiteral("警告")));
     }
 };
 

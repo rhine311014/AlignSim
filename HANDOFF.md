@@ -7,7 +7,8 @@
 - [x] 「内参标定板」页签: 4 种图案, 1:1 物理像素全屏, PNG/PDF/TXT 导出 (`src/sim/CalibBoard.*`, `src/gui/CalibBoardPage.*`); ctest 6/6
 - [x] 已推送 origin/main (a99508d, 2026-11-03 20:20)
 - [x] 修复: 「铺满目标屏」最大整数格距 + 预览矢量重绘 (未提交, 待用户确认)
-- [x] DM 码棋盘格 (`src/sim/DataMatrix.*` 自研 ECC200 编码器, Halcon 26 解码验证), ctest 7/7 (未提交)
+- [x] DM 码棋盘格 (`src/sim/DataMatrix.*` 自研 ECC200 编码器, Halcon 26 解码验证), ctest 7/7 (已推送 b39f5d7)
+- [x] DM 码棋盘格改为康耐视风格 (对照用户参考板 `红外同轴光 AA区(1)(1)/tes图片/111.bmp`), 未提交
 - [ ] 可选: Halcon 新式六边形 calplate (.cpd); 由模拟器直接生成 Halcon .descr; 用户决定不做 ChArUco
 
 ## 0. 进展 (2026-10-25 16:56)

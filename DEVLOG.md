@@ -2,6 +2,11 @@
 
 ## [2026-11-03]
 
+### 22:20 - DM 码棋盘格改为康耐视风格
+- **修改文件**: `src/sim/CalibBoard.h/.cpp`, `src/gui/CalibBoardPage.h/.cpp`, `src/core/AppConfig.cpp`, `tests/test_board.cpp`, `联调说明.md`
+- **修改类型**: 重构
+- **修改内容**: 按用户参考板 (Halcon 解码 13 个码: "80,90 V1 P2 MM", 16×16, light_on_dark) 重做: 码中心落在内角点, 交错网格稀疏分布 (间距 s, 错排 s/2), 2×2 格涂黑 + 白模块 + 1 模块黑边, 内容 "X,Y V1 P格距 MM"; 「码边长/格距」改为「DM 码间距」(配置 codeSpacing), 码内格距随点距/PDF 打印格距写入。验证: Halcon 解码 12/12, 格式/符号尺寸/极性与参考板一致, 反色可读; 主屏 30×18 铺满全屏逐像素一致; ctest 7/7
+
 ### 21:30 - DM 码棋盘格标定板
 - **修改文件**: `src/sim/DataMatrix.h/.cpp` (新增), `src/sim/CalibBoard.h/.cpp`, `src/gui/CalibBoardPage.h/.cpp`, `src/core/AppConfig.cpp`, `CMakeLists.txt`, `tests/test_datamatrix.cpp` (新增), `tests/test_board.cpp`, `联调说明.md`
 - **修改类型**: 新增

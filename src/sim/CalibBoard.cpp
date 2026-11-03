@@ -26,7 +26,7 @@ CalibBoardSpec normalized(const CalibBoardSpec& spec)
     out.nRows = std::clamp(out.nRows, out.eType == BoardType::CircleAsymmetric ? 3 : 2, 200);
     out.nPitchPx = std::clamp(out.nPitchPx, 4, 2000);
     out.dCircleRatio = std::clamp(out.dCircleRatio, 0.1, 0.9);
-    out.dCodeRatio = std::clamp(out.dCodeRatio, 0.3, 0.9);
+    out.nCodeSpacing = std::clamp(out.nCodeSpacing / 2 * 2, 4, 100);  // 取偶数, 保证错排位置为整数角点
     out.nMarginPitch = std::clamp(out.nMarginPitch, 0, 10);
     return out;  // 返回合法化参数
 }
@@ -121,33 +121,32 @@ void paint(QPainter& painter, const CalibBoardSpec& specIn, double u, bool bAnti
     if (spec.eType == BoardType::Chessboard || spec.eType == BoardType::DmChessboard) {
         for (int i = 0; i < spec.nRows; ++i) {
             for (int j = 0; j < spec.nCols; ++j) {
-                if (!isWhiteSquare(i, j)) {
+                if ((i + j) % 2 == 0) {
                     painter.fillRect(QRectF((m + j) * u, (m + i) * u, u, u), colorFg);
                 }
             }
         }
-        // 20261103 ZJH DM 码: 每个白格居中画码; 几何按像素格距计算后整体缩放 (屏幕/PNG 时缩放为 1, 模块落在整数像素)
+        // 20261103 ZJH DM 码: 码区 2×2 格涂黑 (前景色), 码的"深色"模块用背景色画 → 黑底白码 (light_on_dark)
+        //            几何按像素格距计算后整体缩放 (屏幕/PNG 时缩放为 1, 模块落在整数像素)
         if (spec.eType == BoardType::DmChessboard) {
             const DmLayout layout = dmLayout(spec);
-            const double k = u / spec.nPitchPx;           // 像素 → painter 单位
-            const double dMod = layout.dModulePx * k;     // 模块边长
-            for (int i = 0; i < spec.nRows; ++i) {        // 遍历所有白格
-                for (int j = 0; j < spec.nCols; ++j) {
-                    if (!isWhiteSquare(i, j)) {
-                        continue;  // 黑格不放码
-                    }
-                    DmSymbol sym;
-                    std::string strErr;
-                    if (!DataMatrix::encode(dmCodeText(spec, i, j).toStdString(), sym, strErr, layout.nSymbolSize)) {
-                        continue;  // 理论上不会失败 (内容为短 ASCII)
-                    }
-                    const double dX0 = (m + j) * u + layout.dOffsetPx * k;  // 码左上角
-                    const double dY0 = (m + i) * u + layout.dOffsetPx * k;
-                    for (int r = 0; r < sym.nSize; ++r) {         // 逐模块绘制黑模块
-                        for (int c = 0; c < sym.nSize; ++c) {
-                            if (sym.dark(r, c)) {
-                                painter.fillRect(QRectF(dX0 + c * dMod, dY0 + r * dMod, dMod, dMod), colorFg);
-                            }
+            const double k = u / spec.nPitchPx;        // 像素 → painter 单位
+            const double dMod = layout.dModulePx * k;  // 模块边长
+            for (const QPoint& pt : dmCodeCorners(spec)) {  // 遍历每个放码角点
+                const double dBx = (m + pt.x() - 1) * u;  // 码区左上角 (角点左上一格)
+                const double dBy = (m + pt.y() - 1) * u;
+                painter.fillRect(QRectF(dBx, dBy, 2 * u, 2 * u), colorFg);
+                DmSymbol sym;
+                std::string strErr;
+                if (!DataMatrix::encode(dmCodeText(spec, pt.x(), pt.y()).toStdString(), sym, strErr, layout.nSymbolSize)) {
+                    continue;  // 理论上不会失败 (内容为短 ASCII)
+                }
+                const double dX0 = dBx + layout.dOffsetPx * k;  // 符号左上角
+                const double dY0 = dBy + layout.dOffsetPx * k;
+                for (int r = 0; r < sym.nSize; ++r) {  // 逐模块绘制
+                    for (int c = 0; c < sym.nSize; ++c) {
+                        if (sym.dark(r, c)) {
+                            painter.fillRect(QRectF(dX0 + c * dMod, dY0 + r * dMod, dMod, dMod), colorBg);
                         }
                     }
                 }
@@ -186,7 +185,11 @@ void paint(QPainter& painter, const CalibBoardSpec& specIn, double u, bool bAnti
 
 QImage render(const CalibBoardSpec& specIn, double dPixelPitchMm)
 {
-    const CalibBoardSpec spec = normalized(specIn);
+    CalibBoardSpec spec = normalized(specIn);
+    // 20261103 ZJH 未指定码内格距时按 格距像素 × 点距 推算 (DM 码内容写入物理格距)
+    if (spec.dCodePitchMm <= 0.0 && dPixelPitchMm > 0.0) {
+        spec.dCodePitchMm = spec.nPitchPx * dPixelPitchMm;
+    }
     QImage image(boardSizePx(spec), QImage::Format_Grayscale8);
     image.fill(Qt::white);
     {
@@ -204,7 +207,8 @@ QImage render(const CalibBoardSpec& specIn, double dPixelPitchMm)
 
 bool exportPdf(const CalibBoardSpec& specIn, double dPitchMm, const QString& strPath, QString& strErr)
 {
-    const CalibBoardSpec spec = normalized(specIn);
+    CalibBoardSpec spec = normalized(specIn);
+    spec.dCodePitchMm = dPitchMm;  // PDF 的码内格距 = 打印格距
     // 20261103 ZJH 格距必须为正
     if (dPitchMm <= 0.0) {
         strErr = QStringLiteral("格距必须大于 0");
@@ -228,31 +232,52 @@ bool exportPdf(const CalibBoardSpec& specIn, double dPitchMm, const QString& str
     return true;  // 返回成功
 }
 
+std::vector<QPoint> dmCodeCorners(const CalibBoardSpec& specIn)
+{
+    const CalibBoardSpec spec = normalized(specIn);
+    const int s = spec.nCodeSpacing;  // 码间距 (格)
+    const int h = s / 2;              // 错排偏移
+    std::vector<QPoint> vecPts;
+    // 20261103 ZJH 交错网格: (X%s==0 且 Y%s==0) 或 (X%s==h 且 Y%s==h); 码区 2×2 格须完全在图案内
+    for (int y = 1; y < spec.nRows; ++y) {
+        for (int x = 1; x < spec.nCols; ++x) {
+            const bool bMain = (x % s == 0) && (y % s == 0);  // 主网格
+            const bool bHalf = (x % s == h) && (y % s == h);  // 错排网格
+            if (bMain || bHalf) {
+                vecPts.emplace_back(x, y);
+            }
+        }
+    }
+    return vecPts;  // 返回放码角点 (行优先)
+}
+
+QString dmCodeText(const CalibBoardSpec& specIn, int nX, int nY)
+{
+    const CalibBoardSpec spec = normalized(specIn);
+    // 20261103 ZJH 康耐视格式 "X,Y V1 P<格距> MM": 格距用最短十进制表示 (2 → "2", 1.3434 → "1.3434")
+    const double dPitch = spec.dCodePitchMm > 0.0 ? spec.dCodePitchMm : 0.0;
+    return QStringLiteral("%1,%2 V1 P%3 MM").arg(nX).arg(nY).arg(QString::number(dPitch, 'g', 6));
+}
+
 DmLayout dmLayout(const CalibBoardSpec& specIn)
 {
     const CalibBoardSpec spec = normalized(specIn);
     DmLayout layout;
-    // 20261103 ZJH 整板统一符号尺寸: 取最长内容 (最大行列号) 所需尺寸
-    std::vector<int> vecCw;
-    DataMatrix::encodeAscii(dmCodeText(spec, spec.nRows - 1, spec.nCols - 1).toStdString(), vecCw);
-    layout.nSymbolSize = std::max(10, DataMatrix::symbolSizeFor(static_cast<int>(vecCw.size())));
-    const double dCodePx = spec.dCodeRatio * spec.nPitchPx;  // 期望码边长 (像素)
-    // 20261103 ZJH 模块取整数像素 (锐利、可精确复现); 格距太小放不下 1px 模块时退为小数模块
-    const int nModPx = static_cast<int>(std::floor(dCodePx / layout.nSymbolSize));
-    layout.dModulePx = nModPx >= 1 ? nModPx : dCodePx / layout.nSymbolSize;
-    const double dRealCodePx = layout.dModulePx * layout.nSymbolSize;  // 实际码边长
+    // 20261103 ZJH 整板统一符号尺寸: 取所有码内容所需尺寸的最大值 (至少 10)
+    layout.nSymbolSize = 10;
+    for (const QPoint& pt : dmCodeCorners(spec)) {
+        std::vector<int> vecCw;
+        DataMatrix::encodeAscii(dmCodeText(spec, pt.x(), pt.y()).toStdString(), vecCw);
+        layout.nSymbolSize = std::max(layout.nSymbolSize, DataMatrix::symbolSizeFor(static_cast<int>(vecCw.size())));
+    }
+    // 20261103 ZJH 码区边长 2 格; 符号 + 两侧各 1 模块黑边 = 码区 → 模块 = 2p / (S + 2), 取整数像素
+    const double dBlockPx = 2.0 * spec.nPitchPx;
+    const int nModPx = static_cast<int>(std::floor(dBlockPx / (layout.nSymbolSize + 2)));
+    layout.dModulePx = nModPx >= 1 ? nModPx : dBlockPx / (layout.nSymbolSize + 2);
+    const double dCodePx = layout.dModulePx * layout.nSymbolSize;  // 符号边长
     // 20261103 ZJH 居中; 整数模块时偏移也取整, 保证模块边界落在像素边界
-    layout.dOffsetPx = nModPx >= 1 ? std::floor((spec.nPitchPx - dRealCodePx) / 2.0) : (spec.nPitchPx - dRealCodePx) / 2.0;
+    layout.dOffsetPx = nModPx >= 1 ? std::floor((dBlockPx - dCodePx) / 2.0) : (dBlockPx - dCodePx) / 2.0;
     return layout;  // 返回布局
-}
-
-QString dmCodeText(const CalibBoardSpec& specIn, int nRow, int nCol)
-{
-    const CalibBoardSpec spec = normalized(specIn);
-    // 20261103 ZJH 位数按最大行列号统一 (至少 2 位), 整板码长度一致 → 符号尺寸一致
-    const int nRowDigits = std::max(2, static_cast<int>(QString::number(spec.nRows - 1).size()));
-    const int nColDigits = std::max(2, static_cast<int>(QString::number(spec.nCols - 1).size()));
-    return QStringLiteral("R%1C%2").arg(nRow, nRowDigits, 10, QLatin1Char('0')).arg(nCol, nColDigits, 10, QLatin1Char('0'));
 }
 
 QString typeName(BoardType eType)
@@ -269,7 +294,11 @@ QString typeName(BoardType eType)
 
 QString describe(const CalibBoardSpec& specIn, double dPitchMm)
 {
-    const CalibBoardSpec spec = normalized(specIn);
+    CalibBoardSpec spec = normalized(specIn);
+    // 20261103 ZJH 未指定码内格距时与实际格距一致
+    if (spec.dCodePitchMm <= 0.0) {
+        spec.dCodePitchMm = dPitchMm;
+    }
     const QSizeF sizeBoard = boardSizeInPitch(spec);
     const QString strPitch = QString::number(dPitchMm, 'f', 4);
     QString strText = QStringLiteral("图案: %1\n格距/圆心距: %2 mm (%3 px)\n整板尺寸: %4 × %5 mm\n")
@@ -298,25 +327,31 @@ QString describe(const CalibBoardSpec& specIn, double dPitchMm)
         break;
     case BoardType::DmChessboard: {
         const DmLayout layout = dmLayout(spec);
+        const std::vector<QPoint> vecCodes = dmCodeCorners(spec);
         const double dModMm = layout.dModulePx / spec.nPitchPx * dPitchMm;  // 模块物理尺寸
-        strText += QStringLiteral("方格: %1 × %2, 内角点: %3 × %4; 左上角方格为黑\n")
-                       .arg(spec.nCols).arg(spec.nRows).arg(spec.nCols - 1).arg(spec.nRows - 1);
-        strText += QStringLiteral("DM 码: Data Matrix ECC200 %1×%1 模块, 模块 %2 px = %3 mm, 码边长 %4 mm, 位于每个白格中心\n")
-                       .arg(layout.nSymbolSize).arg(layout.dModulePx, 0, 'g', 4).arg(dModMm, 0, 'f', 4)
-                       .arg(dModMm * layout.nSymbolSize, 0, 'f', 3);
-        strText += QStringLiteral("码内容: R行C列 = 该方格行/列号 (0 起), 如 %1 = 第 0 行第 1 列; "
-                                  "方格 (r,c) 左上角物理坐标 = (c·s, r·s), s = %2 mm\n")
-                       .arg(dmCodeText(spec, 0, 1), strPitch);
-        strText += QStringLiteral("Halcon: create_data_code_2d_model('Data Matrix ECC 200', [], [], DataCodeHandle)\n"
+        strText += QStringLiteral("方格: %1 × %2, 内角点: %3 × %4 (格坐标 X = 1..%5, Y = 1..%6, 左上为原点)\n")
+                       .arg(spec.nCols).arg(spec.nRows).arg(spec.nCols - 1).arg(spec.nRows - 1)
+                       .arg(spec.nCols - 1).arg(spec.nRows - 1);
+        strText += QStringLiteral("DM 码: %1 个, 间距 %2 格 (相邻排错开 %3 格); 每个码占以角点为中心的 2×2 格, 黑底白码 (light_on_dark)\n")
+                       .arg(vecCodes.size()).arg(spec.nCodeSpacing).arg(spec.nCodeSpacing / 2);
+        strText += QStringLiteral("      Data Matrix ECC200 %1×%1 模块, 模块 %2 px = %3 mm\n")
+                       .arg(layout.nSymbolSize).arg(layout.dModulePx, 0, 'g', 4).arg(dModMm, 0, 'f', 4);
+        if (!vecCodes.empty()) {
+            strText += QStringLiteral("码内容: \"X,Y V1 P格距 MM\", 如 \"%1\" = 角点 (%2, %3), 物理坐标 (X·s, Y·s), s = %4 mm\n")
+                           .arg(dmCodeText(spec, vecCodes.front().x(), vecCodes.front().y()))
+                           .arg(vecCodes.front().x()).arg(vecCodes.front().y()).arg(strPitch);
+        }
+        strText += QStringLiteral("Halcon: create_data_code_2d_model('Data Matrix ECC 200', 'polarity', 'light_on_dark', DataCodeHandle)\n"
                                   "        find_data_code_2d(Image, SymbolXLDs, DataCodeHandle, 'stop_after_result_num', 1000,\n"
                                   "                          ResultHandles, DecodedDataStrings)\n"
-                                  "        → 码中心所在方格即 R/C 指明的方格, 其四角为角点 (saddle_points_sub_pix 亚像素精化)\n"
-                                  "        → 物点 (c·s, r·s, 0) 经 set_calib_data_calib_object 自定义标定物, 再 calibrate_cameras\n");
-        strText += QStringLiteral("OpenCV: 整板可见时也可 findChessboardCornersSB(img, cv::Size(%1, %2), corners)\n")
-                       .arg(spec.nCols - 1).arg(spec.nRows - 1);
-        // 20261103 ZJH 模块过小读不出码: 实测 Halcon 26 读 2px 模块原图全部失败, 3px 起全部成功
+                                  "        → 码中心即角点 (X,Y), 由此确定周围角点的格坐标 (saddle_points_sub_pix 亚像素精化)\n"
+                                  "        → 物点 (X·s, Y·s, 0) 经 set_calib_data_calib_object 自定义标定物, 再 calibrate_cameras\n");
+        // 20261103 ZJH 码太少无法定位, 模块过小读不出码 (实测 Halcon 26 读 2px 模块原图失败, 3px 起成功)
+        if (vecCodes.empty()) {
+            strText += QStringLiteral("警告: 当前行列数放不下任何码, 请增加行列数或减小码间距\n");
+        }
         if (layout.dModulePx < 3.0) {
-            strText += QStringLiteral("警告: 屏上模块不足 3 px, 读码不可靠, 请增大格距或码占比\n");
+            strText += QStringLiteral("警告: 屏上模块不足 3 px, 读码不可靠, 请增大格距\n");
         }
         strText += QStringLiteral("提示: 相机图像中每个模块应 ≥ 3~4 像素才能稳定读码\n");
         break;

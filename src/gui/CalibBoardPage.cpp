@@ -165,9 +165,11 @@ CalibBoardPage::CalibBoardPage(QWidget* pParent)
     pForm->addRow(QStringLiteral("格距"), m_pSpinPitchPx);
     m_pSpinRatio = makeSpin(0.1, 0.9, 2, 0.5, pGrpPattern);
     pForm->addRow(QStringLiteral("圆直径/圆心距"), m_pSpinRatio);
-    m_pSpinCodeRatio = makeSpin(0.3, 0.9, 2, 0.7, pGrpPattern);
-    m_pSpinCodeRatio->setToolTip(QStringLiteral("DM 码边长 / 格距; 其余为码四周静区 (至少 1 个模块)"));
-    pForm->addRow(QStringLiteral("码边长/格距"), m_pSpinCodeRatio);
+    m_pSpinCodeSpacing = makeIntSpin(4, 100, 10, pGrpPattern);
+    m_pSpinCodeSpacing->setSingleStep(2);
+    m_pSpinCodeSpacing->setSuffix(QStringLiteral(" 格"));
+    m_pSpinCodeSpacing->setToolTip(QStringLiteral("DM 码间距 (偶数): 同排相邻码间隔, 相邻排错开一半; 康耐视板常用 10"));
+    pForm->addRow(QStringLiteral("DM 码间距"), m_pSpinCodeSpacing);
     m_pSpinMargin = makeIntSpin(0, 10, 1, pGrpPattern);
     m_pSpinMargin->setSuffix(QStringLiteral(" 格"));
     pForm->addRow(QStringLiteral("四周留白"), m_pSpinMargin);
@@ -255,7 +257,7 @@ CalibBoardPage::CalibBoardPage(QWidget* pParent)
         connect(pSpin, qOverload<int>(&QSpinBox::valueChanged), this, &CalibBoardPage::onParamsChanged);
     }
     connect(m_pSpinRatio, qOverload<double>(&QDoubleSpinBox::valueChanged), this, &CalibBoardPage::onParamsChanged);
-    connect(m_pSpinCodeRatio, qOverload<double>(&QDoubleSpinBox::valueChanged), this, &CalibBoardPage::onParamsChanged);
+    connect(m_pSpinCodeSpacing, qOverload<int>(&QSpinBox::valueChanged), this, &CalibBoardPage::onParamsChanged);
     connect(m_pSpinPixelPitch, qOverload<double>(&QDoubleSpinBox::valueChanged), this, &CalibBoardPage::onParamsChanged);
     connect(m_pComboType, qOverload<int>(&QComboBox::currentIndexChanged), this, &CalibBoardPage::onParamsChanged);
     connect(m_pChkInvert, &QCheckBox::toggled, this, &CalibBoardPage::onParamsChanged);
@@ -358,7 +360,9 @@ CalibBoardSpec CalibBoardPage::spec() const
     spec.nRows = m_pSpinRows->value();
     spec.nPitchPx = m_pSpinPitchPx->value();
     spec.dCircleRatio = m_pSpinRatio->value();
-    spec.dCodeRatio = m_pSpinCodeRatio->value();
+    spec.nCodeSpacing = m_pSpinCodeSpacing->value();
+    // 20261103 ZJH 码内格距 = 格距像素 × 实际点距 (屏幕显示与 PNG 一致)
+    spec.dCodePitchMm = spec.nPitchPx * effectivePixelPitchMm();
     spec.nMarginPitch = m_pSpinMargin->value();
     spec.bInvert = m_pChkInvert->isChecked();
     return CalibBoard::normalized(spec);  // 返回合法化参数
@@ -380,13 +384,13 @@ void CalibBoardPage::setSettings(const CalibBoardSpec& specIn, double dPixelPitc
     {
         // 20261103 ZJH 批量回填时屏蔽信号, 最后统一刷新一次
         const QSignalBlocker b1(m_pComboType), b2(m_pSpinCols), b3(m_pSpinRows), b4(m_pSpinPitchPx), b5(m_pSpinRatio),
-            b6(m_pSpinMargin), b7(m_pChkInvert), b8(m_pSpinPixelPitch), b9(m_pSpinCodeRatio);
+            b6(m_pSpinMargin), b7(m_pChkInvert), b8(m_pSpinPixelPitch), b9(m_pSpinCodeSpacing);
         m_pComboType->setCurrentIndex(static_cast<int>(spec.eType));
         m_pSpinCols->setValue(spec.nCols);
         m_pSpinRows->setValue(spec.nRows);
         m_pSpinPitchPx->setValue(spec.nPitchPx);
         m_pSpinRatio->setValue(spec.dCircleRatio);
-        m_pSpinCodeRatio->setValue(spec.dCodeRatio);
+        m_pSpinCodeSpacing->setValue(spec.nCodeSpacing);
         m_pSpinMargin->setValue(spec.nMarginPitch);
         m_pChkInvert->setChecked(spec.bInvert);
         m_pSpinPixelPitch->setValue(std::max(0.0, dPixelPitchMm));
@@ -400,7 +404,7 @@ void CalibBoardPage::onParamsChanged()
     const CalibBoardSpec board = spec();
     const bool bCircle = board.eType != BoardType::Chessboard && board.eType != BoardType::DmChessboard;
     m_pSpinRatio->setEnabled(bCircle);  // 直径比只对圆点有效
-    m_pSpinCodeRatio->setEnabled(board.eType == BoardType::DmChessboard);  // 码占比只对 DM 码棋盘格有效
+    m_pSpinCodeSpacing->setEnabled(board.eType == BoardType::DmChessboard);  // 码间距只对 DM 码棋盘格有效
     const double dPitchMm = effectivePixelPitchMm();
     m_pPreview->setBoard(CalibBoard::render(board, dPitchMm), board);
 

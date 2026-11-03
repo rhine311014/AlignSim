@@ -6,14 +6,18 @@
 //   非对称圆点     : OpenCV ASYMMETRIC_GRID 约定, 第 i 行第 j 个圆心 x = (2j + i%2 + 0.5)·p, y = (i + 0.5)·p
 //                    (OpenCV patternSize = (nCols, nRows), 其 squareSize 参数 = p)
 //   Halcon 风格圆点: nCols × nRows 圆点阵列 + 外围黑色方框 + 左上角定向三角 (近似 caltab, 配套 gen_caltab 参数)
-//   DM 码棋盘格    : 棋盘格 + 每个白格中心一个 Data Matrix ECC200, 内容 "R行C列" (0 起, 如 R00C01);
-//                    相机只拍到局部时也能由码确定每个角点在板上的绝对位置 (Halcon find_data_code_2d 原生可读)
+//   DM 码棋盘格    : 康耐视风格 —— 棋盘格上按交错网格稀疏放置 Data Matrix ECC200:
+//                    码中心落在内角点 (X,Y) 上, 以其为中心的 2×2 格整块涂黑, 码为黑底白模块 (light_on_dark),
+//                    四周留 1 模块黑边; 内容 "X,Y V1 P<格距> MM" (X,Y = 角点格坐标, 0 起, 左上为原点)
+//                    网格: X、Y 同为码间距 s 的整数倍, 或同为 s/2 的奇数倍 (相邻两排错开半个间距)
+//                    相机只拍到局部时也能由码确定角点的绝对坐标 (Halcon find_data_code_2d 原生可读)
 //
 // 精度要点: 屏幕/PNG 输出时格距为整数像素; 棋盘格关闭抗锯齿, 边缘正好落在像素边界;
 //           圆点开启抗锯齿 (对称灰度过渡不改变质心, 反而提高亚像素精度)
 #pragma once
 
 #include <QImage>
+#include <QPoint>
 #include <QPointF>
 #include <QSize>
 #include <QString>
@@ -37,7 +41,8 @@ struct CalibBoardSpec {
     int nRows = 7;                // 行数
     int nPitchPx = 40;            // 格距 / 圆心距 (像素, 屏幕与 PNG 输出用)
     double dCircleRatio = 0.5;    // 圆直径 / 圆心距 (圆点类)
-    double dCodeRatio = 0.7;      // DM 码边长 / 格距 (DM 码棋盘格; 剩余部分为码的静区)
+    int nCodeSpacing = 10;        // DM 码间距 (格, 偶数 ≥ 4; 同排相邻码间隔, 相邻排错开一半)
+    double dCodePitchMm = 0.0;    // 写入 DM 码内容的格距 (mm); ≤ 0 时写 0
     int nMarginPitch = 1;         // 四周白色留白 (以格距为单位; 识别算法需要静区)
     bool bInvert = false;         // 黑白反色
 };
@@ -72,16 +77,17 @@ bool exportPdf(const CalibBoardSpec& spec, double dPitchMm, const QString& strPa
 QString describe(const CalibBoardSpec& spec, double dPitchMm);
 
 // 20261103 ZJH DM 码棋盘格布局 (以 nPitchPx 像素格距计算, 保证屏幕/PNG 输出时模块为整数像素)
+//   码区 = 以码角点为中心的 2×2 格 (边长 2·格距), 符号居中, 四周至少 1 模块黑边
 struct DmLayout {
     int nSymbolSize = 0;   // 符号边长 (模块数, 整板统一)
     double dModulePx = 0;  // 模块边长 (像素, 放得下 1px 模块时为整数)
-    double dOffsetPx = 0;  // 码左上角相对白格左上角的偏移 (像素, 整数)
+    double dOffsetPx = 0;  // 符号左上角相对码区左上角的偏移 (像素)
 };
 DmLayout dmLayout(const CalibBoardSpec& spec);
-// 20261103 ZJH 第 nRow 行第 nCol 列方格的码内容 (行列位数随板大小统一补零, 如 "R03C05")
-QString dmCodeText(const CalibBoardSpec& spec, int nRow, int nCol);
-// 20261103 ZJH 是否为放码的白格 (左上角方格为黑, (行+列) 为奇数的是白格)
-inline bool isWhiteSquare(int nRow, int nCol) { return (nRow + nCol) % 2 == 1; }
+// 20261103 ZJH 放码的内角点 (格坐标 X 列, Y 行; 均在 1..nCols−1 / 1..nRows−1 内)
+std::vector<QPoint> dmCodeCorners(const CalibBoardSpec& spec);
+// 20261103 ZJH 角点 (nX, nY) 处的码内容, 如 "80,90 V1 P2 MM"
+QString dmCodeText(const CalibBoardSpec& spec, int nX, int nY);
 
 // 20261103 ZJH 图案显示名
 QString typeName(BoardType eType);
