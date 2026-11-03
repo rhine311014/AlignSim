@@ -45,6 +45,7 @@ add_library(alignsim_core STATIC
     src/sim/PickScene.h            src/sim/PickScene.cpp
     src/sim/CalibRecorder.h        src/sim/CalibRecorder.cpp
     src/sim/CalibBoard.h           src/sim/CalibBoard.cpp
+    src/sim/DataMatrix.h           src/sim/DataMatrix.cpp
     src/core/AppConfig.h           src/core/AppConfig.cpp
 )
 target_include_directories(alignsim_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
@@ -81,7 +82,7 @@ add_custom_command(TARGET AlignSim POST_BUILD
 
 # 20261024 ZJH 单元测试 (Qt Test, 正式回归套件)
 enable_testing()
-foreach(testName test_protocols test_kinematics test_stage test_scenes test_lua test_board)
+foreach(testName test_protocols test_kinematics test_stage test_scenes test_lua test_board test_datamatrix)
     add_executable(${testName} tests/${testName}.cpp)
     target_link_libraries(${testName} PRIVATE alignsim_script Qt6::Test)
     add_test(NAME ${testName} COMMAND ${testName})

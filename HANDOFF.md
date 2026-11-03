@@ -5,8 +5,10 @@
 
 ## 0a. 最新进展 (2026-11-03)
 - [x] 「内参标定板」页签: 4 种图案, 1:1 物理像素全屏, PNG/PDF/TXT 导出 (`src/sim/CalibBoard.*`, `src/gui/CalibBoardPage.*`); ctest 6/6
-- [ ] 待确认: 本次改动提交后是否推送 origin/main
-- [ ] 可选: ChArUco 标定板; 由模拟器直接生成 Halcon .descr
+- [x] 已推送 origin/main (a99508d, 2026-11-03 20:20)
+- [x] 修复: 「铺满目标屏」最大整数格距 + 预览矢量重绘 (未提交, 待用户确认)
+- [x] DM 码棋盘格 (`src/sim/DataMatrix.*` 自研 ECC200 编码器, Halcon 26 解码验证), ctest 7/7 (未提交)
+- [ ] 可选: Halcon 新式六边形 calplate (.cpd); 由模拟器直接生成 Halcon .descr; 用户决定不做 ChArUco
 
 ## 0. 进展 (2026-10-25 16:56)
 - [x] 平台误差注入 (Stage 指令/实际双位置, `src/motion/StageErrorModel.h`), test_stage 9 例

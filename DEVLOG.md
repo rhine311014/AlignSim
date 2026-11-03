@@ -2,6 +2,23 @@
 
 ## [2026-11-03]
 
+### 21:30 - DM 码棋盘格标定板
+- **修改文件**: `src/sim/DataMatrix.h/.cpp` (新增), `src/sim/CalibBoard.h/.cpp`, `src/gui/CalibBoardPage.h/.cpp`, `src/core/AppConfig.cpp`, `CMakeLists.txt`, `tests/test_datamatrix.cpp` (新增), `tests/test_board.cpp`, `联调说明.md`
+- **修改类型**: 新增
+- **修改内容**: 自研 Data Matrix ECC200 编码器 (ASCII 数字对压缩、GF(256) RS 纠错、ISO 16022 附录 F 排布, 10×10~26×26); 新板型「DM 码棋盘格」: 白格中心放码, 内容 R行C列 (补零统一码长), 模块整数像素, 码占比可调; 参数框给出 Halcon 读码 + 自定义标定物流程; 配置 codeRatio 持久化。验证: ISO 例子纠错码字一致; Halcon 26 find_data_code_2d 解码 10×7/15×11/120×5/反色/透视+模糊全部正确 (3px 模块起); OpenCV findChessboardCornersSB 角点偏差 ≈0.1px; 主屏铺满全屏逐像素一致
+- **关联功能**: 相机内参标定板
+
+### 20:55 - 全屏居中偏移差1像素修复
+- **修改文件**: `src/gui/CalibBoardPage.cpp`
+- **修改类型**: 修改
+- **修改内容**: 1:1 模式窗口物理尺寸由四舍五入改为向下取整 (150% 下 1067×1.5=1600.5 被算成 1601, 板高与屏高差为奇数时整板下移 1px)。主屏 2560×1600@150% 铺满实测: 棋盘格/反色棋盘格/对称/非对称/Halcon 五种全部逐像素一致, 板外均为纯背景
+
+### 20:45 - 标定板铺满屏幕与预览清晰
+- **修改文件**: `src/gui/CalibBoardPage.h/.cpp`, `联调说明.md`
+- **修改类型**: 修改
+- **修改内容**: 新增「铺满目标屏」按钮, 按目标屏物理分辨率取能放下整板的最大整数格距 (改格距参数本身, 显示/导出/视觉参数保持一致); 预览由放大位图改为按窗口尺寸矢量重绘, 圆点边缘清晰; 全屏后 raise + activateWindow 置顶并取键盘焦点。实测 2560×1600@150% 铺满后逐像素一致 (0/3328000)
+- **关联功能**: 相机内参标定板
+
 ### 17:55 - 相机内参标定板
 - **修改文件**: `src/sim/CalibBoard.h/.cpp`, `src/gui/CalibBoardPage.h/.cpp`, `src/gui/MainWindow.h/.cpp`, `src/core/AppConfig.h/.cpp`, `CMakeLists.txt`, `tests/test_board.cpp`, `联调说明.md`
 - **修改类型**: 新增

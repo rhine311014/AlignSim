@@ -27,7 +27,8 @@ class CalibBoardView : public QWidget
 public:
     CalibBoardView(bool bExact, QWidget* pParent = nullptr);
 
-    void setBoard(const QImage& image, bool bInvert);  // 设置要显示的精确像素图
+    // 20261103 ZJH 设置标定板: image 为精确像素图 (1:1 模式用), spec 供预览模式按窗口尺寸矢量重绘
+    void setBoard(const QImage& image, const CalibBoardSpec& spec);
     bool isCropped() const;                            // 1:1 模式下整板是否超出窗口
 
 protected:
@@ -36,6 +37,7 @@ protected:
 private:
     bool m_bExact = false;  // 是否 1:1 物理像素
     QImage m_image;         // 精确像素标定板
+    CalibBoardSpec m_spec;  // 标定板参数 (预览矢量绘制用)
     bool m_bInvert = false; // 反色 (背景填黑)
 };
 
@@ -56,6 +58,7 @@ private slots:
     void onScreenChanged();      // 切换显示器 → 刷新系统点距参考
     void onUseSystemPitch();     // 点距用系统读数
     void onApplyTargetMm();      // 按目标 mm 换算格距像素
+    void onFitScreen();          // 按目标屏物理分辨率取能放下整板的最大整数格距
     void onShowFullScreen();     // 在选中显示器全屏 1:1 显示
     void onExportPng();          // 导出精确像素 PNG
     void onExportPdf();          // 导出物理尺寸 PDF
@@ -73,6 +76,7 @@ private:
     QSpinBox* m_pSpinRows = nullptr;
     QSpinBox* m_pSpinPitchPx = nullptr;
     QDoubleSpinBox* m_pSpinRatio = nullptr;
+    QDoubleSpinBox* m_pSpinCodeRatio = nullptr;  // DM 码边长 / 格距
     QSpinBox* m_pSpinMargin = nullptr;
     QCheckBox* m_pChkInvert = nullptr;
     QComboBox* m_pComboScreen = nullptr;

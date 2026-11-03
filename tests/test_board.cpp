@@ -2,6 +2,7 @@
 #include <QtTest>
 
 #include "sim/CalibBoard.h"
+#include "sim/DataMatrix.h"
 
 #include <QFile>
 #include <QTemporaryDir>
@@ -151,6 +152,49 @@ private slots:
         QVERIFY(strDesc.contains(QStringLiteral("gen_caltab(10, 7, 0.01, 0.5")));
         spec.eType = BoardType::Chessboard;
         QVERIFY(CalibBoard::describe(spec, 5.0).contains(QStringLiteral("cv::Size(9, 6)")));
+    }
+
+    void dmChessboard()
+    {
+        // 20261103 ZJH DM 码棋盘格: 尺寸/角点同棋盘格, 码内容补零, 模块整数像素且与编码器逐模块一致
+        CalibBoardSpec spec;
+        spec.eType = BoardType::DmChessboard;
+        spec.nPitchPx = 60;
+        QCOMPARE(CalibBoard::boardSizePx(spec), QSize(720, 540));
+        QCOMPARE(CalibBoard::featurePointsInPitch(spec).size(), size_t(54));
+        QCOMPARE(CalibBoard::dmCodeText(spec, 0, 1), QStringLiteral("R00C01"));
+        CalibBoardSpec specWide = spec;
+        specWide.nCols = 120;
+        QCOMPARE(CalibBoard::dmCodeText(specWide, 3, 7), QStringLiteral("R03C007"));
+
+        // 20261103 ZJH 布局: 0.7×60 = 42px / 12 模块 → 3px 模块, 码 36px, 偏移 12px
+        const CalibBoard::DmLayout layout = CalibBoard::dmLayout(spec);
+        QCOMPARE(layout.nSymbolSize, 12);
+        QCOMPARE(layout.dModulePx, 3.0);
+        QCOMPARE(layout.dOffsetPx, 12.0);
+
+        // 20261103 ZJH 第 0 行第 1 列白格 (含 1 格留白, 左上角像素 (120, 60)) 的码逐模块比对
+        const QImage img = CalibBoard::render(spec);
+        DmSymbol sym;
+        std::string strErr;
+        QVERIFY(DataMatrix::encode("R00C01", sym, strErr, layout.nSymbolSize));
+        const int nX0 = 120 + 12, nY0 = 60 + 12;  // 码左上角像素
+        for (int r = 0; r < sym.nSize; ++r) {
+            for (int c = 0; c < sym.nSize; ++c) {
+                const int nGray = qGray(img.pixel(nX0 + c * 3 + 1, nY0 + r * 3 + 1));  // 模块中心像素
+                QCOMPARE(nGray < 128, sym.dark(r, c));
+            }
+        }
+        // 20261103 ZJH 码四周静区为白, 黑格内无码
+        QCOMPARE(qGray(img.pixel(120 + 5, 60 + 5)), 255);
+        QCOMPARE(qGray(img.pixel(60 + 30, 60 + 30)), 0);
+        // 20261103 ZJH 参数说明含 Halcon 读码与 OpenCV 角点
+        const QString strDesc = CalibBoard::describe(spec, 5.0);
+        QVERIFY(strDesc.contains(QStringLiteral("Data Matrix ECC 200")));
+        QVERIFY(strDesc.contains(QStringLiteral("cv::Size(9, 6)")));
+        QVERIFY(!strDesc.contains(QStringLiteral("警告")));
+        spec.nPitchPx = 40;  // 28px / 12 → 2px 模块, 应警告
+        QVERIFY(CalibBoard::describe(spec, 5.0).contains(QStringLiteral("警告")));
     }
 };
 

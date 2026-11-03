@@ -23,6 +23,7 @@
 #include <QSplitter>
 #include <QVBoxLayout>
 #include <QWindow>
+#include <algorithm>
 #include <cmath>
 
 // ============================================================
@@ -35,17 +36,19 @@ CalibBoardView::CalibBoardView(bool bExact, QWidget* pParent)
     setMinimumSize(200, 150);
 }
 
-void CalibBoardView::setBoard(const QImage& image, bool bInvert)
+void CalibBoardView::setBoard(const QImage& image, const CalibBoardSpec& spec)
 {
     m_image = image;
-    m_bInvert = bInvert;
+    m_spec = CalibBoard::normalized(spec);
+    m_bInvert = m_spec.bInvert;
     update();
 }
 
 bool CalibBoardView::isCropped() const
 {
     const double dDpr = devicePixelRatioF();  // 逻辑像素 → 物理像素倍率
-    return m_image.width() > std::lround(width() * dDpr) || m_image.height() > std::lround(height() * dDpr);
+    // 20261103 ZJH 与 paintEvent 一致按向下取整的物理尺寸判断
+    return m_image.width() > std::floor(width() * dDpr) || m_image.height() > std::floor(height() * dDpr);
 }
 
 void CalibBoardView::paintEvent(QPaintEvent*)
@@ -61,21 +64,29 @@ void CalibBoardView::paintEvent(QPaintEvent*)
         const double dDpr = devicePixelRatioF();
         QImage img = m_image;
         img.setDevicePixelRatio(dDpr);
-        const long nPhysW = std::lround(width() * dDpr);   // 窗口物理宽
-        const long nPhysH = std::lround(height() * dDpr);  // 窗口物理高
+        // 20261103 ZJH 物理尺寸必须向下取整: 150% 下逻辑 1067 × 1.5 = 1600.5, 四舍五入成 1601 会使
+        //            板与屏尺寸差为奇数时居中偏移多 1 物理像素 (棋盘格实测整体下移 1px)
+        const long nPhysW = static_cast<long>(std::floor(width() * dDpr));   // 窗口物理宽
+        const long nPhysH = static_cast<long>(std::floor(height() * dDpr));  // 窗口物理高
         const long nOffX = (nPhysW - m_image.width()) / 2;  // 物理像素整数偏移 (可为负 = 裁切)
         const long nOffY = (nPhysH - m_image.height()) / 2;
         painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
         painter.drawImage(QPointF(nOffX / dDpr, nOffY / dDpr), img);
         return;
     }
-    // 20261103 ZJH 预览: 等比缩放 (仅供查看, 不用于拍屏)
-    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-    const QSize sizeFit = m_image.size().scaled(size() - QSize(16, 16), Qt::KeepAspectRatio);
-    const QRect rcTarget(QPoint((width() - sizeFit.width()) / 2, (height() - sizeFit.height()) / 2), sizeFit);
-    painter.drawImage(rcTarget, m_image);
+    // 20261103 ZJH 预览: 按窗口尺寸矢量重绘 (不放大位图, 圆点边缘清晰; 仅供查看, 不用于拍屏)
+    const QSizeF sizePitch = CalibBoard::boardSizeInPitch(m_spec);  // 整板尺寸 (格距单位)
+    const double dAvailW = std::max(1, width() - 16);   // 可用宽 (四周留 8px)
+    const double dAvailH = std::max(1, height() - 16);  // 可用高
+    const double u = std::min(dAvailW / sizePitch.width(), dAvailH / sizePitch.height());  // 每格距对应逻辑像素
+    const QSizeF sizeFit(sizePitch.width() * u, sizePitch.height() * u);  // 预览整板尺寸
+    const QPointF ptOrigin((width() - sizeFit.width()) / 2.0, (height() - sizeFit.height()) / 2.0);
+    painter.save();
+    painter.translate(ptOrigin);
+    CalibBoard::paint(painter, m_spec, u, true);  // 圆点抗锯齿
+    painter.restore();
     painter.setPen(QColor(150, 150, 150));
-    painter.drawRect(rcTarget.adjusted(0, 0, -1, -1));
+    painter.drawRect(QRectF(ptOrigin, sizeFit).adjusted(0, 0, -1, -1));
 }
 
 // ============================================================
@@ -138,7 +149,8 @@ CalibBoardPage::CalibBoardPage(QWidget* pParent)
     auto* pForm = new QFormLayout(pGrpPattern);
     m_pComboType = new QComboBox(pGrpPattern);
     m_pComboType->addItems({ CalibBoard::typeName(BoardType::Chessboard), CalibBoard::typeName(BoardType::CircleSymmetric),
-                             CalibBoard::typeName(BoardType::CircleAsymmetric), CalibBoard::typeName(BoardType::HalconCircle) });
+                             CalibBoard::typeName(BoardType::CircleAsymmetric), CalibBoard::typeName(BoardType::HalconCircle),
+                             CalibBoard::typeName(BoardType::DmChessboard) });
     pForm->addRow(QStringLiteral("类型"), m_pComboType);
     m_pSpinCols = makeIntSpin(2, 200, 10, pGrpPattern);
     m_pSpinRows = makeIntSpin(2, 200, 7, pGrpPattern);
@@ -153,6 +165,9 @@ CalibBoardPage::CalibBoardPage(QWidget* pParent)
     pForm->addRow(QStringLiteral("格距"), m_pSpinPitchPx);
     m_pSpinRatio = makeSpin(0.1, 0.9, 2, 0.5, pGrpPattern);
     pForm->addRow(QStringLiteral("圆直径/圆心距"), m_pSpinRatio);
+    m_pSpinCodeRatio = makeSpin(0.3, 0.9, 2, 0.7, pGrpPattern);
+    m_pSpinCodeRatio->setToolTip(QStringLiteral("DM 码边长 / 格距; 其余为码四周静区 (至少 1 个模块)"));
+    pForm->addRow(QStringLiteral("码边长/格距"), m_pSpinCodeRatio);
     m_pSpinMargin = makeIntSpin(0, 10, 1, pGrpPattern);
     m_pSpinMargin->setSuffix(QStringLiteral(" 格"));
     pForm->addRow(QStringLiteral("四周留白"), m_pSpinMargin);
@@ -187,6 +202,10 @@ CalibBoardPage::CalibBoardPage(QWidget* pParent)
     m_pLabelInfo->setWordWrap(true);
     m_pLabelInfo->setTextInteractionFlags(Qt::TextSelectableByMouse);
     pScreenForm->addRow(m_pLabelInfo);
+    // 20261103 ZJH 铺满目标屏: 改的是格距参数本身 (整数像素), 保证显示/导出/视觉参数一致
+    auto* pBtnFit = new QPushButton(QStringLiteral("铺满目标屏 (取最大整数格距)"), pGrpScreen);
+    pBtnFit->setToolTip(QStringLiteral("按目标显示器物理分辨率, 计算能完整放下整板 (含留白) 的最大整数格距"));
+    pScreenForm->addRow(pBtnFit);
     auto* pBtnFull = new QPushButton(QStringLiteral("在目标显示器全屏显示 (1:1 物理像素, Esc 退出)"), pGrpScreen);
     pScreenForm->addRow(pBtnFull);
     pPanelLayout->addWidget(pGrpScreen);
@@ -236,12 +255,14 @@ CalibBoardPage::CalibBoardPage(QWidget* pParent)
         connect(pSpin, qOverload<int>(&QSpinBox::valueChanged), this, &CalibBoardPage::onParamsChanged);
     }
     connect(m_pSpinRatio, qOverload<double>(&QDoubleSpinBox::valueChanged), this, &CalibBoardPage::onParamsChanged);
+    connect(m_pSpinCodeRatio, qOverload<double>(&QDoubleSpinBox::valueChanged), this, &CalibBoardPage::onParamsChanged);
     connect(m_pSpinPixelPitch, qOverload<double>(&QDoubleSpinBox::valueChanged), this, &CalibBoardPage::onParamsChanged);
     connect(m_pComboType, qOverload<int>(&QComboBox::currentIndexChanged), this, &CalibBoardPage::onParamsChanged);
     connect(m_pChkInvert, &QCheckBox::toggled, this, &CalibBoardPage::onParamsChanged);
     connect(m_pComboScreen, qOverload<int>(&QComboBox::currentIndexChanged), this, &CalibBoardPage::onScreenChanged);
     connect(pBtnSys, &QPushButton::clicked, this, &CalibBoardPage::onUseSystemPitch);
     connect(pBtnTarget, &QPushButton::clicked, this, &CalibBoardPage::onApplyTargetMm);
+    connect(pBtnFit, &QPushButton::clicked, this, &CalibBoardPage::onFitScreen);  // 点击 → 格距铺满目标屏
     connect(pBtnFull, &QPushButton::clicked, this, &CalibBoardPage::onShowFullScreen);
     connect(pBtnPng, &QPushButton::clicked, this, &CalibBoardPage::onExportPng);
     connect(pBtnPdf, &QPushButton::clicked, this, &CalibBoardPage::onExportPdf);
@@ -315,6 +336,20 @@ void CalibBoardPage::onApplyTargetMm()
     m_pSpinPitchPx->setValue(std::max(4, nPx));
 }
 
+void CalibBoardPage::onFitScreen()
+{
+    // 20261103 ZJH 最大整数格距 = floor(min(屏物理宽 / 整板格数宽, 屏物理高 / 整板格数高))
+    const QSize sizeScreen = physicalScreenSize(selectedScreen());  // 目标屏物理像素
+    if (sizeScreen.isEmpty()) {
+        return;  // 读不到屏幕尺寸, 不改格距
+    }
+    const QSizeF sizePitch = CalibBoard::boardSizeInPitch(spec());  // 整板尺寸 (格距单位, 含留白)
+    const double dMax = std::min(sizeScreen.width() / sizePitch.width(), sizeScreen.height() / sizePitch.height());
+    const int nPx = static_cast<int>(std::floor(dMax));  // 向下取整, 保证放得下
+    // 20261103 ZJH 夹到输入框范围; 太小 (行列过多) 时退到下限, 信息栏会提示裁切
+    m_pSpinPitchPx->setValue(std::clamp(nPx, m_pSpinPitchPx->minimum(), m_pSpinPitchPx->maximum()));
+}
+
 CalibBoardSpec CalibBoardPage::spec() const
 {
     CalibBoardSpec spec;
@@ -323,6 +358,7 @@ CalibBoardSpec CalibBoardPage::spec() const
     spec.nRows = m_pSpinRows->value();
     spec.nPitchPx = m_pSpinPitchPx->value();
     spec.dCircleRatio = m_pSpinRatio->value();
+    spec.dCodeRatio = m_pSpinCodeRatio->value();
     spec.nMarginPitch = m_pSpinMargin->value();
     spec.bInvert = m_pChkInvert->isChecked();
     return CalibBoard::normalized(spec);  // 返回合法化参数
@@ -344,12 +380,13 @@ void CalibBoardPage::setSettings(const CalibBoardSpec& specIn, double dPixelPitc
     {
         // 20261103 ZJH 批量回填时屏蔽信号, 最后统一刷新一次
         const QSignalBlocker b1(m_pComboType), b2(m_pSpinCols), b3(m_pSpinRows), b4(m_pSpinPitchPx), b5(m_pSpinRatio),
-            b6(m_pSpinMargin), b7(m_pChkInvert), b8(m_pSpinPixelPitch);
+            b6(m_pSpinMargin), b7(m_pChkInvert), b8(m_pSpinPixelPitch), b9(m_pSpinCodeRatio);
         m_pComboType->setCurrentIndex(static_cast<int>(spec.eType));
         m_pSpinCols->setValue(spec.nCols);
         m_pSpinRows->setValue(spec.nRows);
         m_pSpinPitchPx->setValue(spec.nPitchPx);
         m_pSpinRatio->setValue(spec.dCircleRatio);
+        m_pSpinCodeRatio->setValue(spec.dCodeRatio);
         m_pSpinMargin->setValue(spec.nMarginPitch);
         m_pChkInvert->setChecked(spec.bInvert);
         m_pSpinPixelPitch->setValue(std::max(0.0, dPixelPitchMm));
@@ -361,10 +398,11 @@ void CalibBoardPage::setSettings(const CalibBoardSpec& specIn, double dPixelPitc
 void CalibBoardPage::onParamsChanged()
 {
     const CalibBoardSpec board = spec();
-    const bool bCircle = board.eType != BoardType::Chessboard;
+    const bool bCircle = board.eType != BoardType::Chessboard && board.eType != BoardType::DmChessboard;
     m_pSpinRatio->setEnabled(bCircle);  // 直径比只对圆点有效
+    m_pSpinCodeRatio->setEnabled(board.eType == BoardType::DmChessboard);  // 码占比只对 DM 码棋盘格有效
     const double dPitchMm = effectivePixelPitchMm();
-    m_pPreview->setBoard(CalibBoard::render(board, dPitchMm), board.bInvert);
+    m_pPreview->setBoard(CalibBoard::render(board, dPitchMm), board);
 
     // 20261103 ZJH 信息栏: 像素尺寸 / 物理尺寸 / 是否放得下目标屏
     const QSize sizePx = CalibBoard::boardSizePx(board);
@@ -392,7 +430,7 @@ void CalibBoardPage::onShowFullScreen()
     }
     const CalibBoardSpec board = spec();
     auto* pView = new CalibBoardView(true, nullptr);
-    pView->setBoard(CalibBoard::render(board, effectivePixelPitchMm()), board.bInvert);
+    pView->setBoard(CalibBoard::render(board, effectivePixelPitchMm()), board);
     auto* pWin = new ViewWindow(pView, QStringLiteral("标定板 %1").arg(CalibBoard::typeName(board.eType)), nullptr);
     // 20261103 ZJH 先把窗口放到目标屏再全屏, 否则会在主屏全屏
     pWin->setGeometry(pScreen->geometry().adjusted(50, 50, -50, -50));
@@ -401,6 +439,9 @@ void CalibBoardPage::onShowFullScreen()
         pWin->windowHandle()->setScreen(pScreen);
     }
     pWin->showFullScreen();
+    // 20261103 ZJH 置顶并激活: 避免全屏窗口被其他窗口压住, 同时让 Esc/F11 键盘焦点落在标定板窗口
+    pWin->raise();
+    pWin->activateWindow();
 }
 
 void CalibBoardPage::onExportPng()
