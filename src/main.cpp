@@ -16,6 +16,10 @@ int main(int argc, char* argv[])
     if (nRunIndex >= 0 && nRunIndex + 1 < lstArgs.size()) {
         window.runScriptFile(lstArgs[nRunIndex + 1]);
     }
+    // 20261108 ZJH 命令行 --mini: 启动后直接进入小窗模式 (拍屏现场: 相机视图全屏, 视觉软件在前台)
+    if (lstArgs.contains(QStringLiteral("--mini"))) {
+        window.enterMiniMode();
+    }
     // 20261024 ZJH 命令行 --grab <目录> [延时ms]: 延时后截取所有页签并退出 (界面自检用)
     const int nGrabIndex = static_cast<int>(lstArgs.indexOf(QStringLiteral("--grab")));
     if (nGrabIndex >= 0 && nGrabIndex + 1 < lstArgs.size()) {

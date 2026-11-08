@@ -235,7 +235,9 @@ bool load(const QString& strPath, AppSettings& s, QString& strErr)
     const QJsonObject ui = root.value("ui").toObject();
     // 20261103 ZJH 内参标定板
     const QJsonObject board = root.value("calibBoard").toObject();
-    s.calibBoard.eType = static_cast<BoardType>(std::clamp(board.value("type").toInt(static_cast<int>(s.calibBoard.eType)), 0, 3));
+    // 20261108 ZJH 上限含 DM 码棋盘格 (4), 原上限 3 会把保存的 DM 板读成 Halcon 板
+    s.calibBoard.eType = static_cast<BoardType>(std::clamp(board.value("type").toInt(static_cast<int>(s.calibBoard.eType)), 0,
+                                                           static_cast<int>(BoardType::DmChessboard)));
     s.calibBoard.nCols = board.value("cols").toInt(s.calibBoard.nCols);
     s.calibBoard.nRows = board.value("rows").toInt(s.calibBoard.nRows);
     s.calibBoard.nPitchPx = board.value("pitchPx").toInt(s.calibBoard.nPitchPx);
@@ -249,6 +251,17 @@ bool load(const QString& strPath, AppSettings& s, QString& strErr)
 
     s.bViewYDown = ui.value("viewYDown").toBool(s.bViewYDown);
     s.nRegisterViewStart = ui.value("registerStart").toInt(s.nRegisterViewStart);
+    // 20261108 ZJH 小窗模式; 没有 "mini" 节点 (旧配置) 时保留默认常用脚本
+    const QJsonObject mini = root.value("mini").toObject();
+    if (mini.contains("favorites")) {
+        s.lstMiniFavorites.clear();
+        for (const QJsonValue& v : mini.value("favorites").toArray()) {  // 按顺序读出常用脚本名
+            s.lstMiniFavorites.append(v.toString());
+        }
+    }
+    s.bMiniStayOnTop = mini.value("stayOnTop").toBool(s.bMiniStayOnTop);
+    s.bGlobalHotkeys = mini.value("hotkeys").toBool(s.bGlobalHotkeys);
+    s.rcMini = QRect(mini.value("x").toInt(), mini.value("y").toInt(), mini.value("w").toInt(), mini.value("h").toInt());
     return true;  // 返回读取成功
 }
 
@@ -299,6 +312,10 @@ bool save(const QString& strPath, const AppSettings& s, QString& strErr)
         { "margin", s.calibBoard.nMarginPitch }, { "invert", s.calibBoard.bInvert },
         { "pixelPitchMm", s.dBoardPixelPitchMm }, { "printPitchMm", s.dBoardPrintPitchMm } };
     root["ui"] = QJsonObject{ { "viewYDown", s.bViewYDown }, { "registerStart", s.nRegisterViewStart } };
+    root["mini"] = QJsonObject{ { "favorites", QJsonArray::fromStringList(s.lstMiniFavorites) },
+                                { "stayOnTop", s.bMiniStayOnTop }, { "hotkeys", s.bGlobalHotkeys },
+                                { "x", s.rcMini.x() }, { "y", s.rcMini.y() },
+                                { "w", s.rcMini.width() }, { "h", s.rcMini.height() } };
 
     QDir().mkpath(QFileInfo(strPath).absolutePath());  // 确保目录存在
     QSaveFile file(strPath);  // 先写临时文件再原子替换, 写一半断电不会损坏原配置

@@ -20,6 +20,8 @@ class LuaEngine;
 class AlignPage;
 class PickPage;
 class CalibBoardPage;
+class GlobalHotkeys;
+class MiniPanel;
 class RegisterTableWidget;
 class StageConfigWidget;
 class QCheckBox;
@@ -43,6 +45,10 @@ public:
     // 20261024 ZJH 依次切换每个页签并把整个窗口截图保存到 strDir (界面自检/文档用)
     void grabAllTabs(const QString& strDir);
 
+public slots:
+    void enterMiniMode();                         // 20261108 ZJH 进入小窗模式: 主窗口收起, 显示置顶小窗 (命令行 --mini)
+    void leaveMiniMode();                         // 20261108 ZJH 回主界面
+
 protected:
     void closeEvent(QCloseEvent* pEvent) override;
 
@@ -52,6 +58,7 @@ private slots:
     void appendLog(const QString& strMsg, bool bError);  // 追加日志
     void onCommLog(const QString& strMsg, bool bError);  // 通信日志 (可过滤)
     void onSaveConfig();                          // 保存配置
+    void onHotkeyDigit(int nDigit);               // 20261108 ZJH 全局热键 Ctrl+Alt+数字
 
 private:
     void buildUi();                    // 构建界面
@@ -59,6 +66,7 @@ private:
     void collectSettingsFromCore();    // 核心对象 → 配置
     void updateServerUi();             // 刷新启停按钮/状态
     void flushLog();                   // 20261026 ZJH 把排队的日志一次性写入日志框
+    void applyHotkeys();               // 20261108 ZJH 按配置注册/注销全局热键
 
     // 20261026 ZJH 待写入的日志行 (高频通信时合并写入, 避免每行一次 HTML 解析 + 重排)
     struct PendingLog {
@@ -96,4 +104,6 @@ private:
     CalibBoardPage* m_pBoardPage = nullptr;  // 20261103 ZJH 内参标定板页
     StageConfigWidget* m_pAlignStageWidget = nullptr;
     StageConfigWidget* m_pPickStageWidget = nullptr;
+    MiniPanel* m_pMini = nullptr;          // 20261108 ZJH 小窗 (独立顶层窗口, 析构时手动删除)
+    GlobalHotkeys* m_pHotkeys = nullptr;   // 20261108 ZJH 全局热键
 };

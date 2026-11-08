@@ -8,7 +8,9 @@
 #include "sim/CalibBoard.h"
 #include "sim/PickScene.h"
 
+#include <QRect>
 #include <QString>
+#include <QStringList>
 #include <vector>
 
 // 20261024 ZJH 单个平台配置
@@ -45,6 +47,13 @@ struct AppSettings {
 
     bool bViewYDown = false;     // 视图 Y 轴朝下 (默认数学坐标 Y 朝上)
     int nRegisterViewStart = 0;  // 寄存器表起始地址
+
+    // 20261108 ZJH 小窗模式: 常用脚本 (按顺序对应 Ctrl+Alt+1~6)、置顶、全局热键、窗口位置 (宽高 ≤0 = 未保存过)
+    QStringList lstMiniFavorites = { QStringLiteral("标定_FCLB_对位平台"), QStringLiteral("对位_FAAC"),
+                                     QStringLiteral("对位_FAAL"), QStringLiteral("验证_精度") };
+    bool bMiniStayOnTop = true;   // 小窗置顶
+    bool bGlobalHotkeys = true;   // 启用全局热键
+    QRect rcMini;                 // 小窗位置与大小
 };
 
 namespace AppConfig {

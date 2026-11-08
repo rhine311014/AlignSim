@@ -5,6 +5,8 @@
 #include "core/RegisterBank.h"
 #include "gui/AlignPage.h"
 #include "gui/CalibBoardPage.h"
+#include "gui/GlobalHotkeys.h"
+#include "gui/MiniPanel.h"
 #include "gui/AlignView.h"
 #include "gui/PickPage.h"
 #include "gui/PickView.h"
@@ -24,6 +26,8 @@
 #include <QDir>
 #include <QFile>
 #include <QFrame>
+#include <QGuiApplication>
+#include <QScreen>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -247,6 +251,9 @@ MainWindow::~MainWindow()
     m_pServer->stop();
     m_pServer->disconnect(this);
     m_pEngine->disconnect(this);
+    // 20261108 ZJH 小窗无父对象 (主窗口隐藏时它要独立显示), 由主窗口负责释放
+    delete m_pMini;
+    m_pMini = nullptr;
 }
 
 bool MainWindow::runScriptFile(const QString& strName)
@@ -274,6 +281,8 @@ void MainWindow::grabAllTabs(const QString& strDir)
         QApplication::processEvents();  // 让排队的重绘/布局先执行
         grab().save(QStringLiteral("%1/tab%2.png").arg(strDir).arg(i));
     }
+    // 20261108 ZJH 小窗也截一张 (隐藏时 grab 同样会渲染)
+    m_pMini->grab().save(QStringLiteral("%1/mini.png").arg(strDir));
 }
 
 void MainWindow::applySettingsToCore()
@@ -326,6 +335,13 @@ void MainWindow::collectSettingsFromCore()
     m_settings.calibBoard = m_pBoardPage->spec();  // 20261103 ZJH 标定板参数
     m_settings.dBoardPixelPitchMm = m_pBoardPage->pixelPitchSetting();
     m_settings.dBoardPrintPitchMm = m_pBoardPage->printPitchMm();
+    // 20261108 ZJH 小窗: 常用脚本 / 置顶 / 热键; 位置只在小窗显示过后更新
+    m_settings.lstMiniFavorites = m_pMini->favorites();
+    m_settings.bMiniStayOnTop = m_pMini->stayOnTop();
+    m_settings.bGlobalHotkeys = m_pMini->hotkeysEnabled();
+    if (m_pMini->isVisible()) {
+        m_settings.rcMini = m_pMini->geometry();
+    }
 }
 
 void MainWindow::buildUi()
@@ -344,6 +360,9 @@ void MainWindow::buildUi()
     pMenuFile->addAction(QStringLiteral("保存配置"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_S), this, &MainWindow::onSaveConfig);
     pMenuFile->addSeparator();
     pMenuFile->addAction(QStringLiteral("退出"), this, &QWidget::close);
+    // 20261108 ZJH 视图菜单: 小窗模式 (Ctrl+M)
+    QMenu* pMenuView = menuBar()->addMenu(QStringLiteral("视图"));
+    pMenuView->addAction(QStringLiteral("小窗模式"), QKeySequence(Qt::CTRL | Qt::Key_M), this, &MainWindow::enterMiniMode);
 
     // ---------------- 顶部通信与全局状态栏 (卡片化) ----------------
     auto* pCommCard = new QFrame(pCentral);
@@ -394,6 +413,10 @@ void MainWindow::buildUi()
     pCommBar->addWidget(m_pChkAutoSnap);
     pCommBar->addWidget(m_pChkYDown);
     pCommBar->addWidget(pBtnSaveCfg);
+    // 20261108 ZJH 小窗模式按钮: 主窗口收起, 留置顶小窗触发脚本 (相机视图继续全屏, 视觉软件可见)
+    auto* pBtnMini = new QPushButton(QStringLiteral("小窗模式"), pCommCard);
+    pBtnMini->setToolTip(QStringLiteral("收起主窗口, 用置顶小窗触发脚本 (Ctrl+M); 全局热键 Ctrl+Alt+1~6 运行常用脚本, Ctrl+Alt+0 全部停止"));
+    pCommBar->addWidget(pBtnMini);
     pMain->addWidget(pCommCard);
 
     // ---------------- 主工作区页签 + 底部日志卡片 ----------------
@@ -525,7 +548,118 @@ void MainWindow::buildUi()
     }, Qt::QueuedConnection);
     m_pAlignPage->setYDown(m_settings.bViewYDown);
     m_pPickPage->setYDown(m_settings.bViewYDown);
+
+    // ---------------- 20261108 ZJH 小窗模式 + 全局热键 ----------------
+    m_pMini = new MiniPanel(nullptr);
+    m_pMini->setScriptDir(ScriptPage::scriptDir());
+    m_pMini->setFavorites(m_settings.lstMiniFavorites);
+    m_pMini->setStayOnTop(m_settings.bMiniStayOnTop);
+    m_pMini->setHotkeysEnabled(m_settings.bGlobalHotkeys);
+    connect(pBtnMini, &QPushButton::clicked, this, &MainWindow::enterMiniMode);
+    connect(m_pMini, &MiniPanel::returnToMainRequested, this, &MainWindow::leaveMiniMode);
+    connect(m_pMini, &MiniPanel::runRequested, this, [this](const QString& strName) {
+        // 20261108 ZJH 同名脚本已在运行时提示, 不重复启动
+        if (m_pEngine->isRunning(strName)) {
+            appendLog(QStringLiteral("脚本 %1 已在运行").arg(strName), true);
+            return;
+        }
+        runScriptFile(strName);
+    });
+    connect(m_pMini, &MiniPanel::stopRequested, m_pEngine, &LuaEngine::stop);
+    connect(m_pMini, &MiniPanel::stopAllRequested, this, [this] {
+        m_pEngine->stopAll();
+        appendLog(QStringLiteral("已请求停止全部脚本"), false);
+    });
+    connect(m_pMini, &MiniPanel::favoritesChanged, this, [this] { m_settings.lstMiniFavorites = m_pMini->favorites(); });
+    connect(m_pMini, &MiniPanel::stayOnTopToggled, this, [this](bool bOn) { m_settings.bMiniStayOnTop = bOn; });
+    connect(m_pMini, &MiniPanel::hotkeysToggled, this, [this](bool bOn) {
+        m_settings.bGlobalHotkeys = bOn;
+        applyHotkeys();
+    });
+    // 20261108 ZJH 引擎运行状态 → 小窗 "运行中" 与常用按钮高亮 (结束信号来自工作线程, 排队到主线程)
+    connect(m_pEngine, &LuaEngine::scriptStarted, this, [this](const QString& strName) { m_pMini->setScriptRunning(strName, true); },
+            Qt::QueuedConnection);
+    connect(m_pEngine, &LuaEngine::scriptFinished, this,
+            [this](const QString& strName, bool, const QString&) { m_pMini->setScriptRunning(strName, false); },
+            Qt::QueuedConnection);
+    m_pHotkeys = new GlobalHotkeys(this);
+    connect(m_pHotkeys, &GlobalHotkeys::digitPressed, this, &MainWindow::onHotkeyDigit);
+    applyHotkeys();
     updateServerUi();
+}
+
+void MainWindow::applyHotkeys()
+{
+    // 20261108 ZJH 关闭时注销; 开启时注册 Ctrl+Alt+0~6, 被其他程序占用的在小窗和日志里提示
+    if (!m_settings.bGlobalHotkeys) {
+        m_pHotkeys->unregisterAll();
+        m_pMini->setHotkeyHint(QString());
+        return;
+    }
+    const QList<int> lstFailed = m_pHotkeys->registerDigits(winId(), { 0, 1, 2, 3, 4, 5, 6 });
+    if (lstFailed.isEmpty()) {
+        m_pMini->setHotkeyHint(QString());
+        return;
+    }
+    QStringList lstKeys;
+    for (int nDigit : lstFailed) {
+        lstKeys.append(QStringLiteral("Ctrl+Alt+%1").arg(nDigit));
+    }
+    const QString strHint = QStringLiteral("热键被其他程序占用: %1").arg(lstKeys.join(QStringLiteral(", ")));
+    m_pMini->setHotkeyHint(strHint);
+    appendLog(strHint, true);
+}
+
+void MainWindow::onHotkeyDigit(int nDigit)
+{
+    // 20261108 ZJH Ctrl+Alt+0 = 全部停止; Ctrl+Alt+1~6 = 第 n 个常用脚本
+    if (nDigit == 0) {
+        m_pEngine->stopAll();
+        appendLog(QStringLiteral("热键 Ctrl+Alt+0: 停止全部脚本"), false);
+        return;
+    }
+    const QStringList lstFav = m_pMini->favorites();
+    if (nDigit > lstFav.size()) {
+        appendLog(QStringLiteral("热键 Ctrl+Alt+%1 未设置常用脚本").arg(nDigit), true);
+        return;
+    }
+    appendLog(QStringLiteral("热键 Ctrl+Alt+%1: %2").arg(nDigit).arg(lstFav[nDigit - 1]), false);
+    if (!m_pMini->runFavorite(nDigit - 1)) {
+        appendLog(QStringLiteral("常用脚本 %1 不存在").arg(lstFav[nDigit - 1]), true);
+    }
+}
+
+void MainWindow::enterMiniMode()
+{
+    m_pMini->reloadScripts();  // 脚本页可能刚新建/改名
+    // 20261108 ZJH 恢复上次位置; 没保存过或屏幕已拔掉时放在主窗口所在屏的右上角
+    QRect rcWin = m_settings.rcMini;
+    bool bOnScreen = false;
+    for (QScreen* pScreen : QGuiApplication::screens()) {  // 小窗中心落在任一屏幕内才算有效
+        if (rcWin.isValid() && pScreen->availableGeometry().contains(rcWin.center())) {
+            bOnScreen = true;
+        }
+    }
+    if (bOnScreen) {
+        m_pMini->setGeometry(rcWin);
+    } else {
+        const QRect rcAvail = (screen() ? screen() : QGuiApplication::primaryScreen())->availableGeometry();
+        m_pMini->move(rcAvail.right() - m_pMini->width() - 20, rcAvail.top() + 40);
+    }
+    updateServerUi();  // 同步通信状态到小窗
+    m_pMini->show();
+    m_pMini->raise();
+    hide();  // 主窗口收起 (不关闭, 不退出; 弹出的相机视图是独立窗口, 不受影响)
+    appendLog(QStringLiteral("进入小窗模式"), false);
+}
+
+void MainWindow::leaveMiniMode()
+{
+    m_settings.rcMini = m_pMini->geometry();  // 记住小窗位置
+    m_pMini->hide();
+    showNormal();
+    raise();
+    activateWindow();
 }
 
 void MainWindow::onToggleServer()
@@ -584,10 +718,19 @@ void MainWindow::updateServerUi()
             m_pLabelServer->setText(QStringLiteral("<font color=#D97706>● 正在连接 %1 (自动重连中)</font>").arg(m_pServer->targetEndpoint()));
         }
     }
+    // 20261108 ZJH 同步到小窗
+    if (m_pMini) {
+        m_pMini->setStatusText(m_pLabelServer->text());
+    }
 }
 
 void MainWindow::appendLog(const QString& strMsg, bool bError)
 {
+    // 20261108 ZJH 小窗只显示脚本/系统日志与错误, 不显示逐帧通信报文 (避免刷屏)
+    if (m_pMini && m_pMini->isVisible()
+        && (bError || !(strMsg.startsWith(QStringLiteral("收")) || strMsg.startsWith(QStringLiteral("发"))))) {
+        m_pMini->appendLog(strMsg, bError);
+    }
     const QString strTime = QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss.zzz"));
     m_vecPendingLog.push_back(PendingLog{ QStringLiteral("%1  %2").arg(strTime, strMsg), bError });
     // 20261026 ZJH 积压超过日志框容量时丢弃最旧的 (反正写进去也会被行数上限挤掉)

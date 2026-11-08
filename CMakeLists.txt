@@ -70,6 +70,8 @@ add_executable(AlignSim WIN32
     src/gui/PickPage.h            src/gui/PickPage.cpp
     src/gui/ScriptPage.h          src/gui/ScriptPage.cpp
     src/gui/CalibBoardPage.h      src/gui/CalibBoardPage.cpp
+    src/gui/MiniPanel.h           src/gui/MiniPanel.cpp
+    src/gui/GlobalHotkeys.h       src/gui/GlobalHotkeys.cpp
 )
 target_link_libraries(AlignSim PRIVATE alignsim_script Qt6::Widgets)
 
@@ -87,6 +89,12 @@ foreach(testName test_protocols test_kinematics test_stage test_scenes test_lua 
     target_link_libraries(${testName} PRIVATE alignsim_script Qt6::Test)
     add_test(NAME ${testName} COMMAND ${testName})
 endforeach()
+# 20261108 ZJH 小窗与全局热键测试 (界面类源码直接编入测试)
+add_executable(test_minipanel tests/test_minipanel.cpp
+    src/gui/MiniPanel.h src/gui/MiniPanel.cpp src/gui/GlobalHotkeys.h src/gui/GlobalHotkeys.cpp)
+target_include_directories(test_minipanel PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_minipanel PRIVATE Qt6::Widgets Qt6::Test)
+add_test(NAME test_minipanel COMMAND test_minipanel)
 # 20261025 ZJH Lua 测试直接加载源码目录的脚本 (握手公共库)
 target_compile_definitions(test_lua PRIVATE ALIGNSIM_SCRIPTS_DIR="${CMAKE_SOURCE_DIR}/scripts")
 add_custom_command(TARGET test_lua POST_BUILD

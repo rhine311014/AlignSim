@@ -1,5 +1,13 @@
 # 开发记录
 
+## [2026-11-08]
+
+### 19:55 - 小窗模式与全局热键
+- **修改文件**: `src/gui/MiniPanel.h/.cpp` (新增), `src/gui/GlobalHotkeys.h/.cpp` (新增), `src/gui/MainWindow.h/.cpp`, `src/main.cpp`, `src/core/AppConfig.h/.cpp`, `CMakeLists.txt`, `tests/test_minipanel.cpp` (新增), `联调说明.md`
+- **修改类型**: 新增
+- **修改内容**: 置顶小窗 (Qt::Tool): 通信状态 / 运行中脚本 / 脚本下拉运行停止 / 常用脚本 ≤6 / 最近日志 / 置顶与热键开关, 关闭=回主界面; 主窗口「小窗模式」按钮 + Ctrl+M + 命令行 --mini; 全局热键 RegisterHotKey Ctrl+Alt+1~6 运行常用脚本、Ctrl+Alt+0 全部停止, 占用时提示; 配置 "mini" 节点持久化 (常用脚本/置顶/热键/位置); 顺带修复配置读取板型上限 3 → 4 (DM 码棋盘格被读成 Halcon 板); test_minipanel 5 例 (含真实注册热键 + WM_HOTKEY 分发)
+- **关联功能**: 拍屏联调操作
+
 ## [2026-11-03]
 
 ### 22:20 - DM 码棋盘格改为康耐视风格
