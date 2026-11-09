@@ -1,6 +1,26 @@
 # 开发记录
 
+## [2026-11-09]
+
+### 08:15 - 拍屏标定失败防呆
+- **修改文件**: `src/sim/CalibBoard.h/.cpp`, `src/gui/CalibBoardPage.cpp`, `tests/test_board.cpp`, `联调说明.md`
+- **修改类型**: 修改
+- **修改内容**: 新增 `dmCodeSpacingFor` / `s_nMinDmCodes=4`, 铺满时自动减小 DM 码间距保证码数 (14×7 由 1 个码变 4 个); 信息栏第一行醒目显示「视觉软件格距 = X mm」及 gen_caltab MarkDist(m); DM 码少于 4 个、3D 姿态不为 0 时红字警告; 拍屏全屏带模拟倾斜时左上角红字; 纠正「无需物理倾斜即可内参标定」的错误说明
+- **关联功能**: 现场标定向导失败 (重投影 15.9 px、MarkDist 填 1 mm、DM 只解出 1 个码)
+
+### 07:10 - 标定板全屏自动铺满
+- **修改文件**: `src/sim/CalibBoard.h/.cpp`, `src/gui/CalibBoardPage.h/.cpp`, `tests/test_board.cpp`, `联调说明.md`
+- **修改类型**: 修改
+- **修改内容**: 新增 `CalibBoard::fitToScreen` (最大整数格距 + 可选自动补行列); 「全屏 1:1 显示」前自动铺满目标屏; 全屏窗口换屏时目标显示器跟随并重新铺满; 新增「自动补行列」勾选 (默认开); 手填点距与本屏系统读数差 > 20% 时提示; test_board 新增 fitToScreen 用例
+- **关联功能**: 相机内参标定板拍屏 (修复全屏留白: 窗口在笔记本屏而目标屏选的是 Mi 1080)
+
 ## [2026-11-08]
+
+### 21:14 - 标定板加下一姿态按钮
+- **修改文件**: `src/gui/CalibBoardPage.h`, `src/gui/CalibBoardPage.cpp`
+- **修改类型**: 新增
+- **修改内容**: 「内参标定板」页加「下一姿态 ▶」按钮 (15 个标准姿态循环, 预览与全屏同步); 全屏窗口内 → / 空格 下一张、← 上一张; 自动轮播与按钮共用 stepPose
+- **关联功能**: 相机内参多姿态拍屏
 
 ### 19:55 - 小窗模式与全局热键
 - **修改文件**: `src/gui/MiniPanel.h/.cpp` (新增), `src/gui/GlobalHotkeys.h/.cpp` (新增), `src/gui/MainWindow.h/.cpp`, `src/main.cpp`, `src/core/AppConfig.h/.cpp`, `CMakeLists.txt`, `tests/test_minipanel.cpp` (新增), `联调说明.md`

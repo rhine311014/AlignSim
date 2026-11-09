@@ -63,6 +63,52 @@ QSize boardSizePx(const CalibBoardSpec& specIn)
                  static_cast<int>(std::lround(size.height() * spec.nPitchPx)));
 }
 
+CalibBoardSpec fitToScreen(const CalibBoardSpec& specIn, const QSize& sizeScreenPx, bool bGrowGrid)
+{
+    CalibBoardSpec spec = normalized(specIn);  // 先合法化, 保证格数计算有效
+    // 20261109 ZJH 读不到屏幕尺寸时不改参数
+    if (sizeScreenPx.isEmpty()) {
+        return spec;  // 原样返回
+    }
+    // 20261109 ZJH 最大整数格距 = floor(min(屏宽 / 整板格数宽, 屏高 / 整板格数高)), 向下取整保证放得下
+    const QSizeF sizePitch = boardSizeInPitch(spec);
+    const double dMax = std::min(sizeScreenPx.width() / sizePitch.width(), sizeScreenPx.height() / sizePitch.height());
+    spec.nPitchPx = std::clamp(static_cast<int>(std::floor(dMax)), 4, 2000);
+    // 20261109 ZJH 不补行列时只再调 DM 码间距
+    if (!bGrowGrid) {
+        if (spec.eType == BoardType::DmChessboard) {
+            spec.nCodeSpacing = dmCodeSpacingFor(spec);  // 保证码数够
+        }
+        return spec;  // 只改格距 (DM 另调码间距)
+    }
+    // 20261109 ZJH 格距定好后, 受限方向已满; 另一方向逐列/逐行加到再加就放不下为止 (上限 200)
+    auto fitsAt = [&sizeScreenPx](const CalibBoardSpec& specTry) {
+        const QSize sizeBoard = boardSizePx(specTry);  // 加一列/行后的整板像素
+        return sizeBoard.width() <= sizeScreenPx.width() && sizeBoard.height() <= sizeScreenPx.height();
+    };
+    while (spec.nCols < 200) {  // 补列
+        CalibBoardSpec specTry = spec;
+        ++specTry.nCols;
+        if (!fitsAt(specTry)) {
+            break;  // 再加一列就超宽
+        }
+        spec = specTry;
+    }
+    while (spec.nRows < 200) {  // 补行
+        CalibBoardSpec specTry = spec;
+        ++specTry.nRows;
+        if (!fitsAt(specTry)) {
+            break;  // 再加一行就超高
+        }
+        spec = specTry;
+    }
+    // 20261109 ZJH DM 码棋盘格: 行列定好后按码数调间距 (现场 14×7 + 间距 10 只有 1 个码, 视觉解不出姿态)
+    if (spec.eType == BoardType::DmChessboard) {
+        spec.nCodeSpacing = dmCodeSpacingFor(spec);
+    }
+    return spec;  // 返回铺满后的参数
+}
+
 std::vector<QPointF> featurePointsInPitch(const CalibBoardSpec& specIn)
 {
     const CalibBoardSpec spec = normalized(specIn);
@@ -251,6 +297,18 @@ std::vector<QPoint> dmCodeCorners(const CalibBoardSpec& specIn)
     return vecPts;  // 返回放码角点 (行优先)
 }
 
+int dmCodeSpacingFor(const CalibBoardSpec& specIn)
+{
+    CalibBoardSpec spec = normalized(specIn);  // 间距已取偶数且 ≥ 4
+    // 20261109 ZJH 从当前间距往下每次减 2, 第一个码数够的就是最大可用间距
+    for (; spec.nCodeSpacing >= 4; spec.nCodeSpacing -= 2) {
+        if (static_cast<int>(dmCodeCorners(spec).size()) >= s_nMinDmCodes) {
+            return spec.nCodeSpacing;  // 码数够
+        }
+    }
+    return 4;  // 行列太少, 最密也放不下 4 个, 用最小间距尽量多放
+}
+
 QString dmCodeText(const CalibBoardSpec& specIn, int nX, int nY)
 {
     const CalibBoardSpec spec = normalized(specIn);
@@ -347,8 +405,10 @@ QString describe(const CalibBoardSpec& specIn, double dPitchMm)
                                   "        → 码中心即角点 (X,Y), 由此确定周围角点的格坐标 (saddle_points_sub_pix 亚像素精化)\n"
                                   "        → 物点 (X·s, Y·s, 0) 经 set_calib_data_calib_object 自定义标定物, 再 calibrate_cameras\n");
         // 20261103 ZJH 码太少无法定位, 模块过小读不出码 (实测 Halcon 26 读 2px 模块原图失败, 3px 起成功)
-        if (vecCodes.empty()) {
-            strText += QStringLiteral("警告: 当前行列数放不下任何码, 请增加行列数或减小码间距\n");
+        // 20261109 ZJH 视觉至少 2 个码才定得出板的姿态, 少于 s_nMinDmCodes 即警告
+        if (static_cast<int>(vecCodes.size()) < s_nMinDmCodes) {
+            strText += QStringLiteral("警告: 板上只有 %1 个码 (建议 ≥ %2 个, 视觉至少要 2 个才定得出姿态), 请减小码间距或增加行列数\n")
+                           .arg(vecCodes.size()).arg(s_nMinDmCodes);
         }
         if (layout.dModulePx < 3.0) {
             strText += QStringLiteral("警告: 屏上模块不足 3 px, 读码不可靠, 请增大格距\n");

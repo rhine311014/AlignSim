@@ -50,6 +50,64 @@ private slots:
         QCOMPARE(CalibBoard::normalized(spec).nCols, 2);
     }
 
+    void fitToScreen()
+    {
+        // 20261109 ZJH 棋盘格 10×7 + 边距 1 = 12×9 格; 1920×1080 时高度限制格距 120
+        CalibBoardSpec spec;
+        CalibBoardSpec fit = CalibBoard::fitToScreen(spec, QSize(1920, 1080), false);
+        QCOMPARE(fit.nPitchPx, 120);
+        QCOMPARE(fit.nCols, 10);  // 不补行列时行列不变
+        QCOMPARE(fit.nRows, 7);
+        // 20261109 ZJH 补行列: 宽度方向 (14+2)×120 = 1920 刚好放下
+        fit = CalibBoard::fitToScreen(spec, QSize(1920, 1080), true);
+        QCOMPARE(fit.nPitchPx, 120);
+        QCOMPARE(fit.nCols, 14);
+        QCOMPARE(fit.nRows, 7);
+        // 20261109 ZJH 笔记本屏 2560×1600: 格距 floor(1600/9) = 177, 列 floor(2560/177) − 2 = 12
+        fit = CalibBoard::fitToScreen(spec, QSize(2560, 1600), true);
+        QCOMPARE(fit.nPitchPx, 177);
+        QCOMPARE(fit.nCols, 12);
+        QCOMPARE(fit.nRows, 7);
+        // 20261109 ZJH Halcon 板含边框多 1 格: 13×10 格 → 格距 108, 列补到 14
+        spec.eType = BoardType::HalconCircle;
+        fit = CalibBoard::fitToScreen(spec, QSize(1920, 1080), true);
+        QCOMPARE(fit.nPitchPx, 108);
+        QCOMPARE(fit.nCols, 14);
+        QCOMPARE(fit.nRows, 7);
+        // 20261109 ZJH 非对称圆点每列占 2 格: 4×11 → 格距 83, 列补到 10
+        spec.eType = BoardType::CircleAsymmetric;
+        spec.nCols = 4;
+        spec.nRows = 11;
+        fit = CalibBoard::fitToScreen(spec, QSize(1920, 1080), true);
+        QCOMPARE(fit.nPitchPx, 83);
+        QCOMPARE(fit.nCols, 10);
+        QCOMPARE(fit.nRows, 11);
+        // 20261109 ZJH 结果整板一定放得下
+        const QSize sizeBoard = CalibBoard::boardSizePx(fit);
+        QVERIFY(sizeBoard.width() <= 1920 && sizeBoard.height() <= 1080);
+        // 20261109 ZJH DM 码棋盘格铺满 1920×1080 成 14×7: 码间距 10 只放得下 1 个码 (现场实拍失败),
+        //   铺满时自动减小到能放下 ≥ 4 个码的最大偶数间距 = 6
+        CalibBoardSpec specDm;
+        specDm.eType = BoardType::DmChessboard;
+        specDm.nCodeSpacing = 10;
+        CalibBoardSpec specTen = specDm;
+        specTen.nCols = 14;
+        QCOMPARE(static_cast<int>(CalibBoard::dmCodeCorners(specTen).size()), 1);
+        fit = CalibBoard::fitToScreen(specDm, QSize(1920, 1080), true);
+        QCOMPARE(fit.nCols, 14);
+        QCOMPARE(fit.nCodeSpacing, 6);
+        QVERIFY(static_cast<int>(CalibBoard::dmCodeCorners(fit).size()) >= CalibBoard::s_nMinDmCodes);
+        // 20261109 ZJH 码够多时不改间距; 放不下 4 个时退到最小 4
+        specTen.nCols = 22;
+        specTen.nRows = 22;
+        QCOMPARE(CalibBoard::dmCodeSpacingFor(specTen), 10);
+        specTen.nCols = 4;
+        specTen.nRows = 4;
+        QCOMPARE(CalibBoard::dmCodeSpacingFor(specTen), 4);
+        // 20261109 ZJH 读不到屏幕尺寸时原样返回
+        QCOMPARE(CalibBoard::fitToScreen(spec, QSize(), true).nPitchPx, spec.nPitchPx);
+    }
+
     void chessboardPixelExact()
     {
         CalibBoardSpec spec;

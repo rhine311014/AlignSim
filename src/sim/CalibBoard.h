@@ -58,6 +58,9 @@ QSizeF patternSizeInPitch(const CalibBoardSpec& spec);
 QSizeF boardSizeInPitch(const CalibBoardSpec& spec);
 // 20261103 ZJH 整板像素尺寸 (格距 = nPitchPx)
 QSize boardSizePx(const CalibBoardSpec& spec);
+// 20261109 ZJH 按屏幕物理像素铺满: 取能放下整板的最大整数格距; bGrowGrid 时再把列/行加到放得下的最大值;
+//   DM 码棋盘格再按 dmCodeSpacingFor 调码间距 (保证码数够). sizeScreenPx 为空时原样返回
+CalibBoardSpec fitToScreen(const CalibBoardSpec& spec, const QSize& sizeScreenPx, bool bGrowGrid);
 
 // 20261103 ZJH 特征点理论位置 (以格距为单位, 整板坐标含边距):
 //   棋盘格 = 内角点 (行优先); 圆点 = 圆心 (行优先)
@@ -86,6 +89,10 @@ struct DmLayout {
 DmLayout dmLayout(const CalibBoardSpec& spec);
 // 20261103 ZJH 放码的内角点 (格坐标 X 列, Y 行; 均在 1..nCols−1 / 1..nRows−1 内)
 std::vector<QPoint> dmCodeCorners(const CalibBoardSpec& spec);
+// 20261109 ZJH 板上至少要有的码数: 视觉至少 2 个码才定得出板的姿态, 局部拍摄/遮挡再留余量
+inline constexpr int s_nMinDmCodes = 4;
+// 20261109 ZJH 不超过当前间距、能放下 ≥ s_nMinDmCodes 个码的最大偶数码间距; 都放不下时返回最小 4
+int dmCodeSpacingFor(const CalibBoardSpec& spec);
 // 20261103 ZJH 角点 (nX, nY) 处的码内容, 如 "80,90 V1 P2 MM"
 QString dmCodeText(const CalibBoardSpec& spec, int nX, int nY);
 
