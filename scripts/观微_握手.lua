@@ -12,6 +12,7 @@
 --   GW_SHOT    检测的拍照号（缺省 1）
 --   GW_RECIPE  换品种用的品种号（缺省 1）
 --   GW_COUNT   检测次数（缺省 1000）
+--   GW_SECONDS 设了就按时间跑：检测这么多秒（连跑 1 小时用 3600），GW_COUNT 不管用
 --   GW_PERIOD  两次检测之间隔多少毫秒（缺省 0，回完就发下一条）
 --   GW_TIMEOUT 每条等视觉多久（毫秒，缺省 5000）
 --   GW_CSV     结果写到哪个文件（缺省 当前目录下 guanwei_handshake.csv）
@@ -21,6 +22,7 @@ local nBase = GW_BASE or 100
 local nShot = GW_SHOT or 1
 local nRecipe = GW_RECIPE or 1
 local nCount = GW_COUNT or 1000
+local nSeconds = GW_SECONDS or 0
 local nPeriod = GW_PERIOD or 0
 local nTimeout = GW_TIMEOUT or 5000
 local strCsv = GW_CSV or "guanwei_handshake.csv"  -- 20261123 ZJH 文件名用英文：Lua 的 io.open 按本机代码页打开，中文名会乱码
@@ -115,8 +117,16 @@ for i, t in ipairs(tChecks) do
 end
 
 -- 20261123 ZJH 检测 nCount 次
-for i = 1, nCount do
-    if not IsLoopValid() then break end
+local tRun = TickMs()
+local i = 0
+while IsLoopValid() do
+    -- 20261123 ZJH 按时间跑到点、或按次数跑够了
+    if nSeconds > 0 then
+        if TickMs() - tRun >= nSeconds * 1000 then break end
+    elseif i >= nCount then
+        break
+    end
+    i = i + 1
     local ok, nEcho, nResult, nData, nMs, strWhy = send(10, nShot)
     if ok and nData ~= nShot then
         ok = false
@@ -136,7 +146,15 @@ for i = 1, nCount do
     nSumMs = nSumMs + nMs
     if nMs > nMaxMs then nMaxMs = nMs end
     if nPeriod > 0 then sleep(nPeriod) end
+    -- 20261123 ZJH 每 500 次写一行进度并落盘（连跑时外面能看到跑到哪了）
+    if i % 500 == 0 then
+        if file then
+            file:write(string.format("# 进度：%d 次，回复不对或超时 %d\n", i, nFail))
+            file:flush()
+        end
+    end
 end
+nCount = i
 
 local strSummary = string.format("汇总：检测 %d 次，OK %d，NG %d，负数码 %d，回复不对或超时 %d，平均 %.1f ms，最慢 %d ms，心跳%s",
                                  nCount, nOk, nNg, nBad, nFail, nSumMs / math.max(1, nCount), nMaxMs,
