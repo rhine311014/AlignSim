@@ -9,6 +9,7 @@
 #include <QHash>
 #include <QObject>
 #include <QTcpServer>
+#include <atomic>
 #include <memory>
 
 class QTcpSocket;
@@ -50,6 +51,15 @@ public:
     QString targetEndpoint() const { return QStringLiteral("%1:%2").arg(m_strClientHost).arg(m_nClientPort); }
     QString errorString() const { return m_server.errorString(); }
 
+    // 20261126 ZJH 【客户端模式】应答切帧的两个纯函数 (不碰成员, 单元测试可直接调)
+    // MC 3E ASCII 应答 (缓冲以 "D000" 开头时调用): 返回 -1 = 半包继续等; 1 = 长度字段非法, 丢 1 字节重同步;
+    //   >= 22 = 整帧字节数 (18 字节头 + 长度字段给出的字符数, 其中至少含 4 个字符的结束码)
+    static int mcAsciiResponseLength(const QByteArray& baBuffer);
+    // 上位链路应答: 按 CR 切帧, CR 后面的 LF 可有可无 (只有 LF 结尾的行也认)
+    // 返回 -1 = 半包继续等; > 0 = 要消费的字节数 (含行尾符); nLineLen 输出行内容的长度 (不含行尾符)
+    // 缓冲开头是上一帧留下的 LF 时返回 1、nLineLen = 0 (只吃掉这个 LF)
+    static int keyenceResponseLength(const QByteArray& baBuffer, int& nLineLen);
+
 signals:
     // 20261024 ZJH 通信日志 (收发报文/解析结果), bError 表示异常类日志
     void logMessage(const QString& strMsg, bool bError);
@@ -78,10 +88,12 @@ private:
     QTcpSocket* m_pClientSocket = nullptr;          // 主动连接套接字 (客户端模式)
     QTimer* m_pReconnectTimer = nullptr;            // 客户端断线重连定时器
     QTimer* m_pPollTimer = nullptr;                 // 客户端主站轮询定时器
-    bool m_bClientMode = false;                     // 当前是否为客户端模式
-    bool m_bClientRunning = false;                  // 客户端是否处于启动状态
-    bool m_bClientMasterPoll = true;                // 客户端是否主动读写远端寄存器
-    bool m_bUpdatingFromRemote = false;             // 防止远端回写本机时再次触发外推
+    // 20261126 ZJH 下面 4 个标志由普通 bool 改成 std::atomic_bool:
+    // registersChanged 是 DirectConnection, 脚本线程写寄存器时会在脚本线程里读它们, 主线程同时在改 → 原先是数据竞争
+    std::atomic_bool m_bClientMode{ false };        // 当前是否为客户端模式
+    std::atomic_bool m_bClientRunning{ false };     // 客户端是否处于启动状态
+    std::atomic_bool m_bClientMasterPoll{ true };   // 客户端是否主动读写远端寄存器
+    std::atomic_bool m_bUpdatingFromRemote{ false };  // 防止远端回写本机时再次触发外推 (只在本对象所在线程置位/复位)
     QString m_strClientHost;                        // 客户端目标 IP
     int m_nClientPort = 7110;                       // 客户端目标端口
     int m_nLastReadAddr = 100;                      // 最近一次主动读起始地址
