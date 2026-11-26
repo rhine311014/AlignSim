@@ -77,6 +77,20 @@ int checkAddr(lua_State* L, int nArg)
     return static_cast<int>(nAddr);  // 返回地址
 }
 
+// 20261126 ZJH 解析双字 (Int32 / Float) 接口用的寄存器地址: 一个值占 nAddr 和 nAddr+1 两个字, 最大只能到 65534
+// 原先: 双字接口也用 checkAddr, 放行 65535; 但 RegisterBank 对 65535 的双字读回 0、写被忽略, 脚本毫无察觉
+// 现在: 地址超过 65534 直接 luaL_error 报清楚
+int checkAddr32(lua_State* L, int nArg)
+{
+    const int nAddr = checkAddr(L, nArg);  // 先按单字规则解析 (0 ~ 65535)
+    // 20261126 ZJH 双字的高字落在 nAddr+1, 必须也在寄存器区内
+    if (nAddr > RegisterBank::s_nRegisterCount - 2) {
+        luaL_error(L, "register address out of range for 32-bit access: %d (max %d)",
+                   nAddr, RegisterBank::s_nRegisterCount - 2);
+    }
+    return nAddr;  // 返回地址 (0 ~ 65534)
+}
+
 // 20261024 ZJH 取当前平台, 没有时报错
 Stage* checkStage(lua_State* L)
 {
@@ -92,21 +106,30 @@ int luaSetInt16(lua_State* L)
 {
     const int nAddr = checkAddr(L, 1);
     const lua_Integer nValue = luaL_checkinteger(L, 2);
-    taskOf(L)->ctx.pBank->setInt16(nAddr, static_cast<int16_t>(nValue));  // 截断为 16 位
+    // 20261126 ZJH 原先: 超出 16 位的值被 static_cast<int16_t> 静默截位 (写 70000 实际落成 4464), 脚本不知道
+    // 现在: 超出 16 位有符号范围 (-32768 ~ 32767) 直接报错; 仓库里现有脚本没有按无符号 (如 0xFFFF) 写的
+    if (nValue < INT16_MIN || nValue > INT16_MAX) {
+        return luaL_error(L, "SetInt16 value out of range (-32768..32767): %I", nValue);
+    }
+    taskOf(L)->ctx.pBank->setInt16(nAddr, static_cast<int16_t>(nValue));  // 范围已校验, 转换不丢位
     return 0;
 }
 
 int luaSetInt32(lua_State* L)
 {
-    const int nAddr = checkAddr(L, 1);
+    const int nAddr = checkAddr32(L, 1);  // 20261126 ZJH 双字接口: 地址最大 65534 (原先放行 65535, 写被忽略)
     const lua_Integer nValue = luaL_checkinteger(L, 2);
-    taskOf(L)->ctx.pBank->setInt32(nAddr, static_cast<int32_t>(nValue));
+    // 20261126 ZJH 原先: 超出 32 位的值被 static_cast<int32_t> 静默截位; 现在: 超出 32 位有符号范围直接报错
+    if (nValue < INT32_MIN || nValue > INT32_MAX) {
+        return luaL_error(L, "SetInt32 value out of range (-2147483648..2147483647): %I", nValue);
+    }
+    taskOf(L)->ctx.pBank->setInt32(nAddr, static_cast<int32_t>(nValue));  // 范围已校验, 转换不丢位
     return 0;
 }
 
 int luaSetFloat(lua_State* L)
 {
-    const int nAddr = checkAddr(L, 1);
+    const int nAddr = checkAddr32(L, 1);  // 20261126 ZJH 浮点占两个字: 地址最大 65534
     const lua_Number dValue = luaL_checknumber(L, 2);
     taskOf(L)->ctx.pBank->setFloat(nAddr, static_cast<float>(dValue));
     return 0;
@@ -121,14 +144,14 @@ int luaGetInt16(lua_State* L)
 
 int luaGetInt32(lua_State* L)
 {
-    const int nAddr = checkAddr(L, 1);
+    const int nAddr = checkAddr32(L, 1);  // 20261126 ZJH 双字接口: 地址最大 65534 (原先 65535 读回 0 不报错)
     lua_pushinteger(L, taskOf(L)->ctx.pBank->getInt32(nAddr));
     return 1;
 }
 
 int luaGetFloat(lua_State* L)
 {
-    const int nAddr = checkAddr(L, 1);
+    const int nAddr = checkAddr32(L, 1);  // 20261126 ZJH 浮点占两个字: 地址最大 65534
     lua_pushnumber(L, taskOf(L)->ctx.pBank->getFloat(nAddr));
     return 1;
 }
@@ -204,7 +227,8 @@ int luaSelectStage(lua_State* L)
 // 20261024 ZJH 从三个寄存器读轴值; bInt32=true 时按各轴倍率换算, 否则读浮点
 AxisValues readAxesFromRegs(lua_State* L, Stage* pStage, bool bInt32)
 {
-    const int arrAddr[3] = { checkAddr(L, 1), checkAddr(L, 2), checkAddr(L, 3) };
+    // 20261126 ZJH 三个地址都是双字 (Int32 / Float), 改用 checkAddr32: 地址最大 65534 (原先放行 65535)
+    const int arrAddr[3] = { checkAddr32(L, 1), checkAddr32(L, 2), checkAddr32(L, 3) };
     RegisterBank* pBank = taskOf(L)->ctx.pBank;
     double arrVal[3] = {};
     for (int i = 0; i < 3; ++i) {  // 逐轴读取
@@ -216,7 +240,8 @@ AxisValues readAxesFromRegs(lua_State* L, Stage* pStage, bool bInt32)
 // 20261024 ZJH 从三个寄存器读位姿 (X/Y 用直线倍率, θ 用角度倍率)
 Pose readPoseFromRegs(lua_State* L, Stage* pStage, bool bInt32)
 {
-    const int arrAddr[3] = { checkAddr(L, 1), checkAddr(L, 2), checkAddr(L, 3) };
+    // 20261126 ZJH 三个地址都是双字 (Int32 / Float), 改用 checkAddr32: 地址最大 65534 (原先放行 65535)
+    const int arrAddr[3] = { checkAddr32(L, 1), checkAddr32(L, 2), checkAddr32(L, 3) };
     RegisterBank* pBank = taskOf(L)->ctx.pBank;
     // 20261024 ZJH Int32: 实际值 = 寄存器 / 10^n
     if (bInt32) {
@@ -231,7 +256,8 @@ Pose readPoseFromRegs(lua_State* L, Stage* pStage, bool bInt32)
 // 20261024 ZJH 三个值写回寄存器; arrDivisor 为 Int32 倍率 (浮点时忽略)
 void writeTriple(lua_State* L, const double arrVal[3], const double arrDivisor[3], bool bInt32)
 {
-    const int arrAddr[3] = { checkAddr(L, 1), checkAddr(L, 2), checkAddr(L, 3) };
+    // 20261126 ZJH 三个地址都是双字 (Int32 / Float), 改用 checkAddr32: 地址最大 65534 (原先放行 65535)
+    const int arrAddr[3] = { checkAddr32(L, 1), checkAddr32(L, 2), checkAddr32(L, 3) };
     RegisterBank* pBank = taskOf(L)->ctx.pBank;
     for (int i = 0; i < 3; ++i) {  // 逐个写入
         if (bInt32) {

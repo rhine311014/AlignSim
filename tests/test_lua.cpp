@@ -61,6 +61,19 @@ private:
         return bOk;
     }
 
+    // 20261126 ZJH 读入 观微_握手.lua, 前面拼上全局变量设置 (基址 100, 超时和等心跳时间调短, CSV 写到临时目录)
+    // nWaitSec: 等心跳最多多少秒 (GW_WAIT); 读不到脚本返回空串, 由调用方 QVERIFY 报错
+    static QString guanweiScript(const Fixture& fx, int nCount, int nTimeoutMs, double dWaitSec = 30.0)
+    {
+        QFile fileScript(QString::fromUtf8(ALIGNSIM_SCRIPTS_DIR) + QStringLiteral("/观微_握手.lua"));
+        if (!fileScript.open(QIODevice::ReadOnly)) {
+            return QString();  // 读不到脚本
+        }
+        return QStringLiteral("GW_BASE = 100 GW_COUNT = %1 GW_TIMEOUT = %2 GW_WAIT = %3 GW_CSV = '%4/gw.csv'\n")
+                   .arg(nCount).arg(nTimeoutMs).arg(dWaitSec).arg(fx.logDir.path())
+               + QString::fromUtf8(fileScript.readAll());  // 返回完整脚本文本
+    }
+
 private slots:
     void registers()
     {
@@ -326,6 +339,208 @@ private slots:
         QVERIFY(strErr.contains("invalid register address"));
         QVERIFY(!runSync(fx, "SelectStage('foo')", strErr));
         QVERIFY(LuaEngine::functionNames().contains("MovePoseAbsInt32"));
+    }
+
+    void setIntRejectsOverflow()
+    {
+        // 20261126 ZJH 回归: SetInt16 / SetInt32 原先对超范围的值静默截位 (70000 落成 4464), 现在必须报错且不写寄存器
+        Fixture fx;
+        QString strErr;
+        // 20261126 ZJH 边界值照常能写
+        QVERIFY2(runSync(fx, "SetInt16('D100', 32767) SetInt16('D101', -32768)\n"
+                             "SetInt32('D110', 2147483647) SetInt32('D112', -2147483648)\n", strErr), qPrintable(strErr));
+        QCOMPARE(fx.bank.getInt16(100), int16_t(32767));
+        QCOMPARE(fx.bank.getInt16(101), int16_t(-32768));
+        QCOMPARE(fx.bank.getInt32(110), int32_t(2147483647));
+        QCOMPARE(fx.bank.getInt32(112), int32_t(-2147483647 - 1));
+        // 20261126 ZJH 上溢 / 下溢: 每条都应报错 (用 pcall 接住, 一个脚本里跑完), 报错信息带上函数名和原值
+        fx.bank.setInt16(120, 7);
+        fx.bank.setInt32(130, 9);
+        QVERIFY2(runSync(fx, "local function bad(f, addr, v, key)\n"
+                             "    local ok, err = pcall(f, addr, v)\n"
+                             "    assert(not ok, 'no error for ' .. tostring(v))\n"
+                             "    assert(tostring(err):find(key, 1, true), tostring(err))\n"
+                             "    assert(tostring(err):find(tostring(v), 1, true), tostring(err))\n"
+                             "end\n"
+                             "bad(SetInt16, 'D120', 70000, 'SetInt16 value out of range')\n"
+                             "bad(SetInt16, 'D120', 32768, 'SetInt16 value out of range')\n"
+                             "bad(SetInt16, 'D120', -32769, 'SetInt16 value out of range')\n"
+                             "bad(SetInt16, 'D120', 65535, 'SetInt16 value out of range')\n"
+                             "bad(SetInt32, 'D130', 2147483648, 'SetInt32 value out of range')\n"
+                             "bad(SetInt32, 'D130', -2147483649, 'SetInt32 value out of range')\n"
+                             "bad(SetInt32, 'D130', 4294967295, 'SetInt32 value out of range')\n", strErr), qPrintable(strErr));
+        // 20261126 ZJH 报错的那些写入都没落到寄存器上
+        QCOMPARE(fx.bank.getInt16(120), int16_t(7));
+        QCOMPARE(fx.bank.getInt32(130), int32_t(9));
+        // 20261126 ZJH 不接 pcall 时脚本以失败结束, 错误信息传到 scriptFinished
+        QVERIFY(!runSync(fx, "SetInt16('D120', 70000)", strErr));
+        QVERIFY2(strErr.contains("SetInt16 value out of range"), qPrintable(strErr));
+    }
+
+    void guanweiHandshakeNormal()
+    {
+        // 20261126 ZJH 观微_握手 正常路径: 测试线程扮演观微 (写心跳、受理、回复), 开始前故意留下脏寄存器
+        Fixture fx;
+        RegisterBank& bank = fx.bank;
+        bank.setInt16(100, 1);       // 上一轮留下的触发
+        bank.setInt16(150, 1);       // 上一轮留下的迟到回复
+        bank.setInt32(106, 5555);    // 别的脚本留下的参数 2 (观微当腔体号, 超出 0~999)
+        bank.setInt16(108, 77);      // 别的脚本留下的序列号
+        bank.setInt16(117, 88);
+        bool bFinishedOk = false;
+        QString strFinishErr;
+        connect(&fx.engine, &LuaEngine::scriptFinished, &fx.engine,
+                [&](const QString&, bool b, const QString& e) { bFinishedOk = b; strFinishErr = e; }, Qt::DirectConnection);
+        const QString strCode = guanweiScript(fx, 3, 2000);
+        QVERIFY(!strCode.isEmpty());
+        QString strErr;
+        QVERIFY2(fx.engine.start(QStringLiteral("gw"), strCode, strErr), qPrintable(strErr));
+        // 20261126 ZJH 脚本开头应清掉 +0 / +50 / +8~+17 (此时假观微还没写心跳, 脚本停在等心跳)
+        QVERIFY(waitFor([&] { return bank.getInt16(100) == 0 && bank.getInt16(150) == 0
+                                  && bank.getInt16(108) == 0 && bank.getInt16(117) == 0; }));
+        int nParam2Bad = 0;  // 受理时看到参数 2 不是 0 的次数
+        int nAccepted = 0;   // 受理的指令条数
+        QElapsedTimer timer;
+        timer.start();
+        while (fx.engine.isRunning(QStringLiteral("gw")) && timer.elapsed() < 15000) {
+            bank.setInt16(149, static_cast<int16_t>(timer.elapsed() / 50 % 30000));  // 心跳计数在涨
+            bank.setInt16(148, 1);                                                  // 视觉状态: 运行
+            if (bank.getInt16(100) == 1) {  // 有指令: 按观微的顺序受理并回复
+                const int nCode = bank.getInt16(102);
+                const int nParam1 = bank.getInt32(104);
+                if (bank.getInt32(106) != 0) {
+                    ++nParam2Bad;
+                }
+                bank.setInt16(150, 0);  // 受理: 先清 +50
+                bank.setInt16(100, 0);  // 再清 +0
+                int nResult = -9;       // 不认识的指令
+                if (nCode == 1 || nCode == 6) {
+                    nResult = 1;
+                } else if (nCode == 5) {
+                    nResult = (nParam1 == 99999) ? -2 : 1;
+                } else if (nCode == 10) {
+                    nResult = (nParam1 == 0) ? -2 : 1;
+                }
+                bank.setInt32(156, nCode == 6 ? 1 : nParam1);  // 回复数据: 查品种回品种号, 检测回拍照号
+                bank.setInt16(152, static_cast<int16_t>(nCode));
+                bank.setInt16(154, static_cast<int16_t>(nResult));
+                bank.setInt16(150, 1);
+                ++nAccepted;
+            }
+            QThread::msleep(2);
+        }
+        QVERIFY(fx.engine.waitForDone(3000));
+        QVERIFY2(bFinishedOk, qPrintable(strFinishErr));
+        QCOMPARE(nAccepted, 6 + 3);  // 6 条别的指令 + 3 次检测
+        QCOMPARE(nParam2Bad, 0);     // 每条都把参数 2 写成 0
+        QCOMPARE(bank.getInt16(100), int16_t(0));
+        QCOMPARE(bank.getInt16(150), int16_t(0));  // 回复都被取走
+        QFile fileCsv(fx.logDir.path() + QStringLiteral("/gw.csv"));
+        QVERIFY(fileCsv.open(QIODevice::ReadOnly));
+        const QString strCsv = QString::fromUtf8(fileCsv.readAll());
+        QVERIFY2(strCsv.contains(QStringLiteral("检测 3 次，OK 3，NG 0，负数码 0，回复不对或超时 0，迟到回复 0")), qPrintable(strCsv));
+    }
+
+    void guanweiHandshakeNotAccepted()
+    {
+        // 20261126 ZJH 回归: 视觉有心跳但不受理 → 原先超时后 +0 留着 1、而且 50 条全部等满超时;
+        // 现在每条超时都收回触发, 连续 5 条没受理就提前结束
+        Fixture fx;
+        RegisterBank& bank = fx.bank;
+        bool bFinishedOk = false;
+        QString strFinishErr;
+        connect(&fx.engine, &LuaEngine::scriptFinished, &fx.engine,
+                [&](const QString&, bool b, const QString& e) { bFinishedOk = b; strFinishErr = e; }, Qt::DirectConnection);
+        const QString strCode = guanweiScript(fx, 50, 150);
+        QVERIFY(!strCode.isEmpty());
+        QString strErr;
+        QVERIFY2(fx.engine.start(QStringLiteral("gw"), strCode, strErr), qPrintable(strErr));
+        bool bSawTrigger = false;  // 是否看到过 +0 = 1 (脚本确实发过指令)
+        QElapsedTimer timer;
+        timer.start();
+        while (fx.engine.isRunning(QStringLiteral("gw")) && timer.elapsed() < 15000) {
+            bank.setInt16(149, static_cast<int16_t>(timer.elapsed() / 50 % 30000));  // 只写心跳, 不受理
+            bSawTrigger = bSawTrigger || bank.getInt16(100) == 1;
+            QThread::msleep(2);
+        }
+        QVERIFY(fx.engine.waitForDone(3000));
+        QVERIFY2(bFinishedOk, qPrintable(strFinishErr));
+        QVERIFY(bSawTrigger);
+        QCOMPARE(bank.getInt16(100), int16_t(0));  // 触发已收回, 观微重连后不会执行没人等的指令
+        QFile fileCsv(fx.logDir.path() + QStringLiteral("/gw.csv"));
+        QVERIFY(fileCsv.open(QIODevice::ReadOnly));
+        const QString strCsv = QString::fromUtf8(fileCsv.readAll());
+        QVERIFY2(strCsv.contains(QStringLiteral("提前结束")), qPrintable(strCsv));
+        // 20261126 ZJH 只发了 5 条就放弃 (没有把 6 + 50 条都等满): CSV 里数据行 (不以 # 开头, 去掉表头) 正好 5 行
+        int nRows = 0;  // 数据行数
+        const QStringList lstLines = strCsv.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+        for (const QString& strLine : lstLines) {
+            if (!strLine.startsWith(QLatin1Char('#'))) {
+                ++nRows;
+            }
+        }
+        QCOMPARE(nRows, 1 + 5);  // 表头 + 5 条
+    }
+
+    void guanweiHandshakeNoHeartbeat()
+    {
+        // 20261126 ZJH 回归: 心跳一直不动 → 原先等满后照样往下发指令; 现在记日志后直接结束, 一条指令都不发
+        Fixture fx;
+        RegisterBank& bank = fx.bank;
+        bool bFinishedOk = false;
+        QString strFinishErr;
+        connect(&fx.engine, &LuaEngine::scriptFinished, &fx.engine,
+                [&](const QString&, bool b, const QString& e) { bFinishedOk = b; strFinishErr = e; }, Qt::DirectConnection);
+        const QString strCode = guanweiScript(fx, 50, 150, 0.3);  // 等心跳只等 0.3 秒
+        QVERIFY(!strCode.isEmpty());
+        QString strErr;
+        QVERIFY2(fx.engine.start(QStringLiteral("gw"), strCode, strErr), qPrintable(strErr));
+        bool bSawTrigger = false;  // 是否看到过 +0 = 1
+        QElapsedTimer timer;
+        timer.start();
+        while (fx.engine.isRunning(QStringLiteral("gw")) && timer.elapsed() < 5000) {
+            bSawTrigger = bSawTrigger || bank.getInt16(100) == 1;
+            QThread::msleep(2);
+        }
+        QVERIFY(fx.engine.waitForDone(3000));
+        QVERIFY2(bFinishedOk, qPrintable(strFinishErr));
+        QVERIFY(!bSawTrigger);                // 没发过指令
+        QVERIFY(timer.elapsed() < 3000);      // 没有去等后面每条的超时
+        QFile fileCsv(fx.logDir.path() + QStringLiteral("/gw.csv"));
+        QVERIFY(fileCsv.open(QIODevice::ReadOnly));
+        QVERIFY(QString::fromUtf8(fileCsv.readAll()).contains(QStringLiteral("心跳")));
+    }
+
+    void doubleWordAddrLimit()
+    {
+        // 20261126 ZJH 回归: 双字 / 浮点接口原先放行地址 65535 (RegisterBank 读回 0、写被忽略), 现在要求 ≤ 65534
+        Fixture fx;
+        QString strErr;
+        // 20261126 ZJH 65534 是双字能用的最后一个地址; 单字接口 65535 仍然可用
+        QVERIFY2(runSync(fx, "SetInt32('D65534', 123456)\n"
+                             "assert(GetInt32(65534) == 123456)\n"
+                             "SetFloat(65534, 1.5)\n"
+                             "assert(GetFloat('D65534') == 1.5)\n"
+                             "SetInt16('D65535', 5)\n"
+                             "assert(GetInt16(65535) == 5)\n", strErr), qPrintable(strErr));
+        // 20261126 ZJH 65535 的双字 / 浮点读写、以及三地址的平台接口: 一律报错 (用 pcall 接住, 一个脚本里跑完)
+        QVERIFY2(runSync(fx, "local function bad(name, f, ...)\n"
+                             "    local ok, err = pcall(f, ...)\n"
+                             "    assert(not ok, 'no error for ' .. name)\n"
+                             "    assert(tostring(err):find('out of range for 32-bit access', 1, true), name .. ': ' .. tostring(err))\n"
+                             "end\n"
+                             "bad('SetInt32 str', SetInt32, 'D65535', 1)\n"
+                             "bad('SetInt32 int', SetInt32, 65535, 1)\n"
+                             "bad('GetInt32', GetInt32, 'D65535')\n"
+                             "bad('SetFloat', SetFloat, 'DM65535', 1.0)\n"
+                             "bad('GetFloat', GetFloat, 65535)\n"
+                             "bad('WriteCurrentPosInt32', WriteCurrentPosInt32, 'D10', 'D12', 'D65535')\n"
+                             "bad('WritePoseFloat', WritePoseFloat, 'D65535', 'D12', 'D14')\n"
+                             "bad('MoveAbsInt32', MoveAbsInt32, 'D65535', 'D12', 'D14')\n"
+                             "bad('MovePoseAbsFloat', MovePoseAbsFloat, 'D10', 'D65535', 'D14')\n", strErr), qPrintable(strErr));
+        // 20261126 ZJH 不接 pcall 时脚本以失败结束
+        QVERIFY(!runSync(fx, "SetInt32('D65535', 1)", strErr));
+        QVERIFY2(strErr.contains("out of range for 32-bit access"), qPrintable(strErr));
     }
 };
 

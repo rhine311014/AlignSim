@@ -5,11 +5,34 @@
 
 #include <QHostAddress>
 #include <QTcpSocket>
+#include <QThread>
 #include <QTimer>
 #include <algorithm>
 
 namespace {
 constexpr int s_nMaxBufferSize = 1024 * 1024;  // 单连接缓冲上限 1MB, 防止异常客户端撑爆内存
+constexpr int s_nGarbageLogHeadBytes = 16;     // 20261126 ZJH 丢弃垃圾数据的日志里最多带前多少个字节
+constexpr int s_nMcAsciiRespHeadChars = 18;    // 20261126 ZJH MC 3E ASCII 应答头长度: "D000" 等 14 字符 + 长度字段 4 字符
+constexpr int s_nMcAsciiRespMinChars = 22;     // 20261126 ZJH MC 3E ASCII 应答最小帧长: 头 18 + 结束码 4
+
+// 20261126 ZJH 单个字符转十六进制数值; 不是 0-9 / A-F / a-f 返回 -1
+// 不用 QByteArray::toInt(…, 16): 它接受 "-FFF"、带前导空格的串, 会算出负数或错位的长度
+int hexDigitValue(char ch)
+{
+    // 20261126 ZJH 数字 0~9
+    if (ch >= '0' && ch <= '9') {
+        return ch - '0';
+    }
+    // 20261126 ZJH 大写 A~F
+    if (ch >= 'A' && ch <= 'F') {
+        return ch - 'A' + 10;
+    }
+    // 20261126 ZJH 小写 a~f
+    if (ch >= 'a' && ch <= 'f') {
+        return ch - 'a' + 10;
+    }
+    return -1;  // 非十六进制字符
+}
 }
 
 PlcServer::PlcServer(RegisterBank* pBank, QObject* pParent)
@@ -31,8 +54,13 @@ PlcServer::PlcServer(RegisterBank* pBank, QObject* pParent)
         // 20261026 ZJH 用 DirectConnection 在 writeWords 发生的同一时刻同步检查 m_bUpdatingFromRemote,
         // 防止网络回写触发 QueuedConnection 时 m_bUpdatingFromRemote 已复位导致死循环回写!
         connect(m_pBank, &RegisterBank::registersChanged, this, [this](int nAddr, int nCount) {
-            if (m_bUpdatingFromRemote || !m_bClientMode || !m_bClientRunning || !m_bClientMasterPoll) {
-                return;
+            // 20261126 ZJH 原先: 只看 m_bUpdatingFromRemote。本 lambda 是 DirectConnection, 脚本线程写寄存器时它就跑在脚本线程里;
+            //   若此刻主线程正好在处理远端回写 (标志为 true), 脚本的这次写会被误当成 "远端回写" 丢掉, 推不到远端
+            // 现在: 远端回写一定发生在本对象所在线程 (onReadyRead / tryConsumeClientResponse 里同步 writeWords),
+            //   所以只有 "当前线程就是本对象所在线程 且 标志为 true" 才算远端回写; 别的线程的写一律照常外推
+            const bool bRemoteEcho = (QThread::currentThread() == thread()) && m_bUpdatingFromRemote.load();
+            if (bRemoteEcho || !m_bClientMode.load() || !m_bClientRunning.load() || !m_bClientMasterPoll.load()) {
+                return;  // 远端回写、或不在客户端主站状态: 不外推
             }
             QMetaObject::invokeMethod(this, [this, nAddr, nCount] {
                 onLocalRegistersChanged(nAddr, nCount);
@@ -251,6 +279,11 @@ void PlcServer::onReadyRead()
         return;
     }
 
+    // 20261126 ZJH 本次 readyRead 里丢弃的垃圾数据累计: 原先每丢 1 字节记一条错误日志,
+    // 对端协议选错时每秒刷几十条, 灌 1MB 垃圾就是上百万条日志、界面卡死; 现在攒起来, 循环结束后只记一条
+    int nGarbageBytes = 0;     // 本次一共丢了多少字节
+    QByteArray baGarbageHead;  // 被丢数据的前 s_nGarbageLogHeadBytes 个字节 (写进日志便于判断对端发的是什么)
+
     // 20261024 ZJH 循环切帧, 直到数据不足一帧
     while (!baBuffer.isEmpty()) {
         // 20261026 ZJH 若处于客户端模式, 先检查是否为远端服务端对主动读/写请求的【应答帧】
@@ -274,7 +307,15 @@ void PlcServer::onReadyRead()
         }
         // 20261024 ZJH 垃圾数据: 丢弃并记日志, 继续尝试同步
         if (eStatus == IPlcProtocol::FrameStatus::Garbage) {
-            emit logMessage(QStringLiteral("丢弃无法识别数据: %1").arg(frameToText(baBuffer.left(nLen))), true);
+            // 20261126 ZJH 这里不再逐次记日志, 只累计字节数并留下开头几个字节, 汇总日志在循环之后
+            if (nLen <= 0) {
+                nLen = 1;  // 防御: 协议报垃圾却没给出丢弃长度时至少丢 1 字节, 避免死循环
+            }
+            const int nHeadRoom = s_nGarbageLogHeadBytes - static_cast<int>(baGarbageHead.size());  // 日志头部还能再放几个字节
+            if (nHeadRoom > 0) {
+                baGarbageHead.append(baBuffer.left(std::min(nLen, nHeadRoom)));  // 只留前 16 字节
+            }
+            nGarbageBytes += nLen;  // 累计丢弃字节数
             baBuffer.remove(0, nLen);
             continue;
         }
@@ -295,6 +336,13 @@ void PlcServer::onReadyRead()
                 emit logMessage(QStringLiteral("发 %1").arg(frameToText(baAnswer)), false);
             }
         }
+    }
+
+    // 20261126 ZJH 一次 readyRead 只记一条丢弃日志: 共丢多少字节 + 前 16 字节的十六进制
+    if (nGarbageBytes > 0) {
+        emit logMessage(QStringLiteral("丢弃无法识别数据: 共 %1 字节, 前 %2 字节(十六进制): %3")
+                            .arg(nGarbageBytes).arg(baGarbageHead.size())
+                            .arg(QString::fromLatin1(baGarbageHead.toHex(' ').toUpper())), true);
     }
 }
 
@@ -345,18 +393,14 @@ int PlcServer::tryConsumeClientResponse(const QByteArray& baBuffer)
     // 2. MC 3E ASCII 应答帧: 头为 "D000"
     if ((m_eType == ProtocolType::McAscii || m_eType == ProtocolType::KeyenceMcAscii)
         && baBuffer.startsWith("D000")) {
-        if (baBuffer.size() < 22) {
-            return -1;
+        // 20261126 ZJH 切帧交给 mcAsciiResponseLength (长度字段逐字符校验):
+        // 原先用 toInt(…,16), "-FFF" 这类被接受后 nTotal 为负, 永远算 "半包", 这条连接就卡死了
+        const int nTotal = mcAsciiResponseLength(baBuffer);
+        if (nTotal < s_nMcAsciiRespMinChars) {
+            return nTotal;  // -1 = 半包继续等; 1 = 长度字段非法, 丢 1 字节重同步
         }
-        bool bOk = false;
-        const int nDataChars = baBuffer.mid(14, 4).toInt(&bOk, 16);
-        if (!bOk) {
-            return 4;
-        }
-        const int nTotal = 18 + nDataChars;
-        if (baBuffer.size() < nTotal) {
-            return -1;
-        }
+        const int nDataChars = nTotal - s_nMcAsciiRespHeadChars;  // 长度字段的值: 结束码 4 字符 + 数据字符数
+        bool bOk = false;  // 结束码 / 数据字的解析是否成功
         const int nEndCode = baBuffer.mid(18, 4).toInt(&bOk, 16);
         if (bOk && nEndCode == 0 && nDataChars > 4 && m_pBank) {
             const int nWords = (nDataChars - 4) / 4;
@@ -373,11 +417,14 @@ int PlcServer::tryConsumeClientResponse(const QByteArray& baBuffer)
     // 3. Keyence 上位链路应答帧: 以 "OK\r\n"、"E0\r\n" 或 数字空格序列+"\r\n" 结尾 (且不以 RD/WR 命令开头)
     if (m_eType == ProtocolType::KeyenceLink
         && !baBuffer.startsWith("RD") && !baBuffer.startsWith("WR")) {
-        const int nLf = baBuffer.indexOf('\n');
-        if (nLf < 0) {
-            return -1;
+        // 20261126 ZJH 原先必须等到 LF 才算一行, 远端只发 CR 结尾的行就永远算半包;
+        // 现在按 CR 切帧, 其后的 LF 可有可无 (LF 晚到时作为下一帧开头被吃掉), 见 keyenceResponseLength
+        int nLineLen = 0;  // 行内容长度 (不含行尾符)
+        const int nConsume = keyenceResponseLength(baBuffer, nLineLen);
+        if (nConsume < 0) {
+            return -1;  // 半包: 还没收到行尾符
         }
-        const QString strLine = QString::fromLatin1(baBuffer.left(nLf)).trimmed();
+        const QString strLine = QString::fromLatin1(baBuffer.left(nLineLen)).trimmed();
         if (!m_bLastReqWasWrite && strLine != QStringLiteral("OK") && !strLine.startsWith(QLatin1Char('E')) && m_pBank) {
             const QStringList lstTokens = strLine.split(QLatin1Char(' '), Qt::SkipEmptyParts);
             std::vector<uint16_t> vecWords;
@@ -394,7 +441,7 @@ int PlcServer::tryConsumeClientResponse(const QByteArray& baBuffer)
                 m_bUpdatingFromRemote = false;
             }
         }
-        return nLf + 1;
+        return nConsume;  // 消费整行 (含行尾符); 行内容为空 (只吃 LF) 时上面不会写寄存器
     }
     // 4. Modbus TCP 主站应答帧: Transaction ID 为 0xA55A (客户端主站主动发出的标志)
     if (m_eType == ProtocolType::ModbusTcp && baBuffer.size() >= 2 && u8(0) == 0xA5 && u8(1) == 0x5A) {
@@ -423,6 +470,60 @@ int PlcServer::tryConsumeClientResponse(const QByteArray& baBuffer)
         return nTotal;
     }
     return 0;
+}
+
+// 20261126 ZJH MC 3E ASCII 应答切帧 (纯函数): 头 14 字符 + 长度 4 字符 (十六进制) + 结束码 4 字符 + 数据
+// 返回 -1 = 半包; 1 = 长度字段非法 (丢 1 字节重同步); >= 22 = 整帧字节数
+int PlcServer::mcAsciiResponseLength(const QByteArray& baBuffer)
+{
+    // 20261126 ZJH 连最小帧 (头 + 结束码) 都没收齐: 半包
+    if (baBuffer.size() < s_nMcAsciiRespMinChars) {
+        return -1;
+    }
+    int nDataChars = 0;  // 长度字段的值 (结束码 + 数据的字符数)
+    // 20261126 ZJH 长度字段在第 14~17 个字符, 逐字符校验必须是十六进制数字
+    for (int i = 14; i < s_nMcAsciiRespHeadChars; ++i) {
+        const int nDigit = hexDigitValue(baBuffer[i]);  // 当前字符的数值, -1 表示非法
+        if (nDigit < 0) {
+            return 1;  // 含 '-'、空格等非十六进制字符: 不是合法应答, 丢 1 字节重同步
+        }
+        nDataChars = nDataChars * 16 + nDigit;  // 高位在前累加
+    }
+    // 20261126 ZJH 长度至少要容得下 4 个字符的结束码, 否则总长小于最小帧长, 同样丢 1 字节重同步
+    if (nDataChars < s_nMcAsciiRespMinChars - s_nMcAsciiRespHeadChars) {
+        return 1;
+    }
+    const int nTotal = s_nMcAsciiRespHeadChars + nDataChars;  // 整帧字节数 (最大 18 + 0xFFFF, 远小于缓冲上限)
+    // 20261126 ZJH 数据区还没收齐: 半包
+    if (baBuffer.size() < nTotal) {
+        return -1;
+    }
+    return nTotal;  // 返回整帧字节数
+}
+
+// 20261126 ZJH 上位链路应答切帧 (纯函数): 行尾符认 CR、CR LF、单独的 LF 三种
+int PlcServer::keyenceResponseLength(const QByteArray& baBuffer, int& nLineLen)
+{
+    nLineLen = 0;  // 先清输出: 半包或只吃 LF 时调用方拿到 0
+    int nEnd = -1;  // 第一个行尾符的位置
+    // 20261126 ZJH 找第一个行尾符 (CR 或 LF)
+    for (int i = 0; i < baBuffer.size(); ++i) {
+        if (baBuffer[i] == '\r' || baBuffer[i] == '\n') {
+            nEnd = i;  // 记下位置
+            break;
+        }
+    }
+    // 20261126 ZJH 没有行尾符: 半包
+    if (nEnd < 0) {
+        return -1;
+    }
+    nLineLen = nEnd;          // 行内容 = 行尾符之前的部分 (缓冲开头就是 LF 时为 0, 即上一帧 CR 之后晚到的 LF)
+    int nConsume = nEnd + 1;  // 至少消费到行尾符
+    // 20261126 ZJH CR 后面紧跟着 LF (CR LF 结尾) 时一起吃掉; LF 还没到就不等, 下次作为开头的 LF 单独吃
+    if (baBuffer[nEnd] == '\r' && nConsume < baBuffer.size() && baBuffer[nConsume] == '\n') {
+        ++nConsume;
+    }
+    return nConsume;  // 返回要消费的字节数
 }
 
 QByteArray PlcServer::buildClientReadFrame(int nAddr, int nCount) const

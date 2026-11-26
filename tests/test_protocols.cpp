@@ -6,6 +6,7 @@
 #include "comm/McAsciiProtocol.h"
 #include "comm/McBinaryProtocol.h"
 #include "comm/ModbusTcpProtocol.h"
+#include "comm/PlcServer.h"  // 20261126 ZJH 客户端应答切帧的两个静态函数
 #include "core/RegisterBank.h"
 
 // 20261024 ZJH 十六进制字符串 → 字节 (测试里写报文更直观)
@@ -219,6 +220,46 @@ private slots:
         // 5. 异常码: 非法功能码 0x05 → 0x85 0x01; 读地址越界 → 0x83 0x02
         QCOMPARE(pro.handleFrame(hex("0004 0000 0006 01 05 0000 FF00"), bank, strLog), hex("0004 0000 0003 01 85 01"));
         QCOMPARE(pro.handleFrame(hex("0005 0000 0006 01 03 FFFF 0002"), bank, strLog), hex("0005 0000 0003 01 83 02"));
+    }
+
+    // ---------------- 客户端模式: 应答切帧 ----------------
+    void clientResponse_mcAsciiLength()
+    {
+        // 20261126 ZJH 回归: 长度字段原先用 toInt(…,16), "-FFF" 被接受后总长为负, 永远算半包卡死
+        const QByteArray baOk("D00000FF03FF00" "000C" "0000" "0102" "A0B0");  // 读 2 个字的正常应答, 共 30 字符
+        QCOMPARE(PlcServer::mcAsciiResponseLength(baOk), 30);
+        QCOMPARE(PlcServer::mcAsciiResponseLength(baOk + baOk), 30);                    // 粘包: 只切第一帧
+        QCOMPARE(PlcServer::mcAsciiResponseLength(baOk.left(21)), -1);                  // 半包: 头没收齐
+        QCOMPARE(PlcServer::mcAsciiResponseLength(baOk.left(26)), -1);                  // 半包: 数据区没收齐
+        QCOMPARE(PlcServer::mcAsciiResponseLength("D00000FF03FF00" "0004" "0000"), 22);  // 写应答: 只有结束码
+        QCOMPARE(PlcServer::mcAsciiResponseLength("D00000FF03FF00" "000c" "0000" "0102" "A0B0"), 30);  // 小写十六进制也认
+        // 20261126 ZJH 长度字段非法: 丢 1 字节重同步 (返回 1), 不能返回 -1 一直等
+        QCOMPARE(PlcServer::mcAsciiResponseLength("D00000FF03FF00" "-FFF" "0000" "0102" "A0B0"), 1);
+        QCOMPARE(PlcServer::mcAsciiResponseLength("D00000FF03FF00" "00G8" "0000" "0102" "A0B0"), 1);
+        QCOMPARE(PlcServer::mcAsciiResponseLength("D00000FF03FF00" " 00C" "0000" "0102" "A0B0"), 1);
+        QCOMPARE(PlcServer::mcAsciiResponseLength("D00000FF03FF00" "+00C" "0000" "0102" "A0B0"), 1);
+        // 20261126 ZJH 长度比结束码还短: 总长小于最小帧长, 同样丢 1 字节
+        QCOMPARE(PlcServer::mcAsciiResponseLength("D00000FF03FF00" "0000" "0000"), 1);
+        QCOMPARE(PlcServer::mcAsciiResponseLength("D00000FF03FF00" "0003" "0000"), 1);
+    }
+
+    void clientResponse_keyenceLength()
+    {
+        // 20261126 ZJH 回归: 原先必须等到 LF, 远端只发 CR 结尾的行就一直算半包
+        int nLineLen = -1;  // 行内容长度输出
+        QCOMPARE(PlcServer::keyenceResponseLength("OK\r", nLineLen), 3);  // 只有 CR
+        QCOMPARE(nLineLen, 2);
+        QCOMPARE(PlcServer::keyenceResponseLength("OK\r\n", nLineLen), 4);  // CR LF 一起吃
+        QCOMPARE(nLineLen, 2);
+        QCOMPARE(PlcServer::keyenceResponseLength("OK\n", nLineLen), 3);  // 只有 LF 的行也认 (保持原先能用的情况)
+        QCOMPARE(nLineLen, 2);
+        QCOMPARE(PlcServer::keyenceResponseLength("+00123 -00005\r+00007\r", nLineLen), 14);  // 粘包: 只切第一行
+        QCOMPARE(nLineLen, 13);
+        QCOMPARE(PlcServer::keyenceResponseLength("\nOK\r", nLineLen), 1);  // 上一帧 CR 之后晚到的 LF: 只吃 1 字节
+        QCOMPARE(nLineLen, 0);
+        QCOMPARE(PlcServer::keyenceResponseLength("+00123 -000", nLineLen), -1);  // 半包: 还没有行尾符
+        QCOMPARE(nLineLen, 0);
+        QCOMPARE(PlcServer::keyenceResponseLength(QByteArray(), nLineLen), -1);  // 空缓冲
     }
 
     // ---------------- RegisterBank ----------------
